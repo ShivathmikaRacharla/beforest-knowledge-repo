@@ -1,0 +1,23 @@
+# Dependencies and Next.js output
+node_modules/
+.next/
+out/
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+
+# Runtime document storage
+storage/
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Logs and local tooling
+*.log
+.playwright-cli/
+output/
+tsconfig.tsbuildinfo
+.DS_Store
+Thumbs.db
