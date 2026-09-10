@@ -76,3 +76,37 @@ export async function sendInviteEmail(invite: {
 
   return { sent: true };
 }
+
+export async function sendDocumentReadyEmail(notification: {
+  to: string;
+  recipientName: string;
+  documentName: string;
+  teamName: string;
+  uploadedBy: string;
+  readyDate: string;
+  documentUrl: string;
+}) {
+  if (!emailConfigured()) throw new Error("SMTP is not configured.");
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: smtpPort(),
+    secure: smtpSecure(),
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
+  });
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: notification.to,
+    subject: `New knowledge document ready: ${notification.documentName}`,
+    text: [
+      `Hi ${notification.recipientName},`,
+      "",
+      "A new document is ready in your permitted knowledge base.",
+      `Document: ${notification.documentName}`,
+      `Team: ${notification.teamName}`,
+      `Uploaded by: ${notification.uploadedBy}`,
+      `Ready date: ${notification.readyDate}`,
+      `Open document: ${notification.documentUrl}`,
+    ].join("\n"),
+    html: `<div style="font-family:Arial,sans-serif;color:#18211e;line-height:1.5"><h2 style="color:#073c30">New knowledge document ready</h2><p>Hi ${notification.recipientName},</p><p>A new document is ready in your permitted knowledge base.</p><table cellpadding="8" cellspacing="0" style="border-collapse:collapse;border:1px solid #dde3df"><tr><td><strong>Document</strong></td><td>${notification.documentName}</td></tr><tr><td><strong>Team</strong></td><td>${notification.teamName}</td></tr><tr><td><strong>Uploaded by</strong></td><td>${notification.uploadedBy}</td></tr><tr><td><strong>Ready date</strong></td><td>${notification.readyDate}</td></tr></table><p><a href="${notification.documentUrl}">Open document</a></p></div>`,
+  });
+}

@@ -13,9 +13,94 @@ The application lets permitted users upload documents, browse indexed knowledge,
 - Support role-based access:
   - Admin: full access
   - User: Knowledge, upload documents, Ask Beforest
-  - Contributor: Knowledge and upload documents only
 - Track search history, feedback, retrieval quality, low-confidence cases, and operational health
 - Invite users with admin-created credentials and optional SMTP email delivery
+
+## Current RAG architecture
+
+The target production architecture uses the OpenAI Vector Store as the retrieval/indexing layer and PostgreSQL as the application source of truth. For local testing, the same application records are stored in SQLite.
+
+```mermaid
+flowchart TD
+    A["User uploads document"] --> B["Next.js validates permission and metadata"]
+    B --> C["Store original in object storage"]
+    C --> D["Create document and processing job in PostgreSQL"]
+    D --> E["Background worker uploads through OpenAI Files API"]
+    E --> F["Attach file to OpenAI Vector Store with attributes"]
+    F --> G["OpenAI handles extraction, chunking, embedding and indexing"]
+    G --> H["Worker checks indexing status"]
+    H --> I["Document marked Ready and Published"]
+
+    J["User asks a question"] --> K["Next.js Chat API"]
+    K --> L["Authenticate user"]
+    L --> M["Resolve document, folder and department access"]
+    M --> N["Determine search scope"]
+    N --> O["Build metadata filters"]
+    O --> P["Responses API with File Search"]
+    P --> Q["Limit retrieved results"]
+    Q --> R["Return retrieval results, file citations and evidence"]
+    R --> S["Check evidence quality"]
+    S --> T["GPT generates grounded answer"]
+    T --> U["Stream answer with citations"]
+
+    R --> V["Save exact retrieval trace"]
+    U --> W["Save conversation and feedback"]
+    V --> X["PostgreSQL analytics and admin dashboard"]
+    W --> X
+```
+
+Local MVP behavior:
+
+- SQLite stores users, chats, document records, processing jobs, feedback, retrieval traces, admin settings, and analytics.
+- Upload still runs synchronously through the Next.js API for local testing.
+- Object storage and a background worker are production-phase pieces.
+- New OpenAI vector-store files receive production-style attributes.
+- Strict metadata filters are available in Admin settings, but should remain off until legacy OpenAI vector-store imports are backfilled with metadata.
+
+Production behavior:
+
+- PostgreSQL should replace local SQLite through `DATABASE_URL`.
+- Original files should be persisted in object storage before indexing.
+- A background worker should process indexing jobs and update document status.
+- Retrieval should use metadata filters for published/current/permitted documents.
+
+## Vector-store file attributes
+
+New uploads attach attributes to the OpenAI vector-store file:
+
+```json
+{
+  "document_id": "doc_20260730_abc123",
+  "department_id": "general",
+  "folder_id": "uploaded-documents",
+  "document_type": "document",
+  "status": "published",
+  "version": 1,
+  "is_current": true,
+  "access_group": "all"
+}
+```
+
+These attributes are the foundation for department, folder, access-group, version, and published/current filtering.
+
+## Retrieval trace logging
+
+For each chat query, the app stores:
+
+- query
+- response ID
+- model
+- latency
+- max retrieved results
+- filter used
+- source filenames
+- top retrieval score
+- retrieved file IDs
+- document IDs when known
+- retrieved text/excerpts
+- citation/source names
+
+The default `max_num_results` is `5` to reduce latency and token usage. Admins can tune this in Admin → Settings.
 
 ## Tech stack
 

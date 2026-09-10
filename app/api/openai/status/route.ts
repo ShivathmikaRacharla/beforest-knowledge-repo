@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { getOpenAI, getVectorStoreId } from "@/lib/openai";
 import { requireActiveUser } from "@/lib/auth";
+import { listKnowledgeDocuments } from "@/lib/kms";
 
 export const runtime = "nodejs";
 
@@ -8,19 +8,24 @@ export async function GET(request: Request) {
   try {
     const auth = requireActiveUser(request);
     if ("response" in auth) return auth.response;
-    const store = await getOpenAI().vectorStores.retrieve(getVectorStoreId());
+    const { documents, documentCount } = await listKnowledgeDocuments();
     return NextResponse.json({
       connected: true,
-      name: store.name,
-      status: store.status,
-      fileCounts: store.file_counts,
+      name: "Approved knowledge base",
+      status: "ready",
+      fileCounts: {
+        in_progress: 0,
+        completed: documentCount || documents.length,
+        failed: 0,
+        cancelled: 0,
+        total: documentCount || documents.length,
+      },
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       {
         connected: false,
-        error:
-          error instanceof Error ? error.message : "OpenAI connection failed.",
+        error: "Knowledge backend connection failed.",
       },
       { status: 503 },
     );

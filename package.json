@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "sync:vector-metadata": "node scripts/sync-vector-store-metadata.mjs"
   },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.13",

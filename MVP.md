@@ -26,7 +26,7 @@ The MVP must provide:
 - Retrieval relevance scoring, reranking, and traceability.
 - User feedback for continuous retrieval and answer-quality improvement.
 - External web search using SearXNG.
-- Role-based access using Admin, Contributor, and User roles.
+- Role-based access using Admin and User roles.
 - An admin panel for system configuration, monitoring, analytics, and audit.
 
 ## 3. Technology baseline
@@ -58,43 +58,30 @@ Admins have complete system access, including:
 - Model, prompt, RAG, and SearXNG configuration.
 - Usage, cost, performance, security, and audit information.
 
-### Contributor
-
-Contributors are Users with additional document contribution capabilities:
-
-- Use permitted internal and external search features.
-- View permitted folders and documents.
-- Upload documents into permitted folders.
-- Enter and edit metadata for their own uploads.
-- Monitor extraction and indexing status for their uploads.
-- Notify permitted teams when a document is published.
-- Replace their own document when allowed by policy.
-
-Contributors cannot access the admin panel, assign permissions, permanently delete documents, change models or prompts, or inspect other users' histories.
-
 ### User
 
 Users can:
 
 - View permitted folders and documents.
 - Ask questions against permitted internal knowledge.
+- Upload documents when the current deployment allows user uploads.
 - Use SearXNG when enabled by an Admin.
 - View their conversations and citations.
 - Rate answers and submit feedback.
 
-Users cannot upload documents or access the admin panel.
+Users cannot access the admin panel.
 
 ## 5. Permission requirements
 
 - Permissions must be applied before retrieval. Unauthorized chunks must never be sent to the model.
 - Access can be assigned by user, team, folder, or document.
-- Contributor uploads are limited to explicitly permitted folders.
+- User uploads are limited to explicitly permitted folders.
 - Only Admins can assign permissions or permanently delete content.
 - Notifications can only be sent to audiences permitted to access the document.
 - All uploads, approvals, permission changes, configuration changes, downloads, and deletions must be audited.
-- The system must support a configurable Contributor workflow:
+- The system must support a configurable user upload workflow:
   - Admin approval before publishing; or
-  - Direct publishing for trusted Contributors in selected folders.
+  - Direct publishing for trusted Users in selected folders.
 
 ## 6. Document ingestion pipeline
 
@@ -253,7 +240,7 @@ Sanitized user query
 ### Users and permissions
 
 - Create, disable, reactivate, and inspect users.
-- Assign Admin, Contributor, or User roles.
+- Assign Admin or User roles.
 - Manage teams and memberships.
 - Manage folder and document permissions.
 - View sessions and recent activity.
@@ -431,7 +418,7 @@ The prototype must validate the vector-layer decision and establish realistic qu
 - Model fine-tuning before sufficient reviewed feedback exists.
 - Fully autonomous web browsing or web actions.
 - Supporting every possible file format without validation.
-- Multiple additional organizational roles beyond Admin, Contributor, and User.
+- Multiple additional organizational roles beyond Admin and User.
 - Advanced workflow automation unrelated to document ingestion and review.
 - Native mobile applications.
 
@@ -439,7 +426,7 @@ The prototype must validate the vector-layer decision and establish realistic qu
 
 - Approve this MVP specification.
 - Finalize supported file formats and maximum upload sizes.
-- Decide whether Contributor uploads require approval by default.
+- Decide whether user uploads require approval by default.
 - Validate OpenAI managed vector stores against retrieval-control requirements.
 - Define the database schema and API contracts.
 - Create interface wireframes.

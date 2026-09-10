@@ -1,14 +1,15 @@
 ﻿"use client";
 
 import {
+  AlertCircle,
   ArrowRight,
   Bell,
   BookOpen,
   ChevronDown,
+  CheckCircle2,
   Clock3,
   Download,
   ExternalLink,
-  FileCheck2,
   FileText,
   Filter,
   Folder,
@@ -24,32 +25,26 @@ import {
   SlidersHorizontal,
   ThumbsDown,
   ThumbsUp,
-  Upload,
   Users,
   X,
 } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { DEFAULT_KNOWLEDGE_SYSTEM_PROMPT } from "@/lib/prompts";
 
-type Role = "Admin" | "Contributor" | "User";
+type Role = "Admin" | "User";
 type View = "knowledge" | "ask" | "web" | "admin";
 type AuthUser = {
   id: number;
   name: string;
   email: string;
   role: Role;
+  teamId?: number | null;
   active: boolean;
   lastActiveAt?: string | null;
   createdAt: string;
-};
-type Project = {
-  id: number;
-  name: string;
-  description: string;
-  createdBy: string;
-  createdAt: string;
-  threadCount: number;
 };
 type ConversationSummary = {
   id: string;
@@ -66,6 +61,20 @@ function evidenceBand(score?: number | null) {
   if (score >= 0.6) return "High";
   if (score >= 0.35) return "Medium";
   return "Low";
+}
+
+function cleanDisplayText(value?: string | null) {
+  return (value || "")
+    .replace(/â€¦/g, "…")
+    .replace(/â€”/g, "—")
+    .replace(/Â·/g, "·")
+    .replace(/â€œ/g, "“")
+    .replace(/â€/g, "”")
+    .replace(/â€™/g, "’")
+    .replace(/â€˜/g, "‘")
+    .replace(/â€/g, "—")
+    .replace(/�/g, "")
+    .trim();
 }
 
 function isNeedsReview(row: { topScore?: number | null; chunks?: number; feedback?: "up" | "down"; resolution?: string | null }) {
@@ -86,13 +95,14 @@ function retrievalIssueReason(row: { topScore?: number | null; chunks?: number; 
 
 function retrievalSuggestion(row: { topScore?: number | null; chunks?: number; feedback?: "up" | "down"; sources?: string[] }) {
   if (row.feedback === "down") return "Review answer quality and source match.";
-  if (!row.chunks || !row.sources?.length) return "Check whether the document is indexed in the vector store.";
+  if (!row.chunks || !row.sources?.length) return "Check whether the document is available in the approved knowledge base.";
   if (typeof row.topScore === "number" && row.topScore < 0.35 && row.sources?.length) return "If the source is correct, improve chunking or metadata. If the source is wrong, add clearer filename/folder metadata or improve query expansion.";
   return "Confirm whether the retrieved source answers the query.";
 }
 
 type KnowledgeDocument = {
   id: string;
+  documentId?: string;
   name: string;
   type: string;
   folder: string;
@@ -101,23 +111,39 @@ type KnowledgeDocument = {
   status: string;
   size: string;
   rawFolder?: string;
+  dropboxPath?: string;
+  dropboxFileId?: string;
 };
 
 const legacyFolderNames = new Set(["Policies", "Operations", "Research", "Community"]);
 
 function displayKnowledgeFolder(folder?: string, owner?: string) {
-  if (owner === "OpenAI vector store") return "Vector store imports";
-  if (!folder || folder === "Knowledge base") return "Uploaded documents";
-  if (legacyFolderNames.has(folder)) return "Uploaded documents";
+  if (owner === "Approved knowledge base") return "Approved documents";
+  if (!folder || folder === "Knowledge base") return "Approved documents";
+  if (legacyFolderNames.has(folder)) return "Approved documents";
   return folder;
+}
+
+function viewFromPath(pathname: string, role?: Role): View {
+  if (pathname.startsWith("/documents")) return "knowledge";
+  if (pathname.startsWith("/admin") && role === "Admin") return "admin";
+  if (pathname.startsWith("/settings") && role === "Admin") return "admin";
+  if (pathname.startsWith("/chat")) return "ask";
+  return "ask";
+}
+
+function pathForView(view: View) {
+  if (view === "knowledge") return "/documents";
+  if (view === "admin") return "/admin";
+  return "/chat";
 }
 
 const searchRows: string[][] = [];
 
 function Brand() {
   return (
-    <div className="brand" aria-label="Beforest â€” Nature at Work">
-      <span className="brand-logo" role="img" aria-label="Beforest â€” Nature at Work" />
+    <div className="brand" aria-label="Beforest — Nature at Work">
+      <span className="brand-logo" role="img" aria-label="Beforest — Nature at Work" />
     </div>
   );
 }
@@ -132,11 +158,6 @@ function Sidebar({
   onSelectChat,
   selectedChatId,
   recentChats,
-  projects,
-  projectChatCounts,
-  selectedProjectId,
-  onAddProject,
-  onSelectProject,
 }: {
   view: View;
   setView: (v: View) => void;
@@ -147,17 +168,10 @@ function Sidebar({
   onSelectChat: (chat: ConversationSummary) => void;
   selectedChatId: string;
   recentChats: ConversationSummary[];
-  projects: Project[];
-  projectChatCounts: Record<number, number>;
-  selectedProjectId: number | null;
-  onAddProject: () => void;
-  onSelectProject: (project: Project) => void;
 }) {
   const items = [
     { id: "knowledge" as View, label: "Knowledge", icon: BookOpen },
-    ...(role === "Contributor"
-      ? []
-      : [{ id: "ask" as View, label: "Ask Beforest", icon: MessageSquareText }]),
+    { id: "ask" as View, label: "Ask Beforest", icon: MessageSquareText },
     ...(role === "Admin"
       ? [{ id: "admin" as View, label: "Admin", icon: Settings }]
       : []),
@@ -188,37 +202,15 @@ function Sidebar({
             </button>
           ))}
         </nav>
-        {role !== "Contributor" && <div className="chat-sidebar-tools">
+        <div className="chat-sidebar-tools">
           <button className="new-chat-button" onClick={onNewChat}>
             <MessageSquareText size={17} />
             <span>New chat</span>
             <span className="new-chat-plus">+</span>
           </button>
-          <div className="chat-sidebar-heading">
-            <span>Projects</span>
-            <button type="button" aria-label="Add project" title="Create project" onClick={onAddProject}>+</button>
-          </div>
-          {projects.map((project) => (
-            <button
-              type="button"
-              className={`chat-sidebar-row project-row ${selectedProjectId === project.id ? "selected" : ""}`}
-              key={project.id}
-              onClick={() => {
-                onSelectProject(project);
-                closeMobile();
-              }}
-              title={`${project.description || project.name} - ${projectChatCounts[project.id] ?? 0} thread${(projectChatCounts[project.id] ?? 0) === 1 ? "" : "s"}`}
-            >
-              <Folder size={16} />
-              <span>{project.name}</span>
-              <small className="project-thread-count">
-                {projectChatCounts[project.id] ?? 0} thread{(projectChatCounts[project.id] ?? 0) === 1 ? "" : "s"}
-              </small>
-            </button>
-          ))}
           <div className="chat-sidebar-heading recent-heading">Recent chats</div>
           {recentChats.map((chat) => <button className={`chat-sidebar-row chat-history ${selectedChatId === chat.id ? "selected" : ""}`} key={chat.id} onClick={() => onSelectChat(chat)}><Clock3 size={15} /><span>{chat.title}</span></button>)}
-        </div>}
+        </div>
       </aside>
     </>
   );
@@ -239,6 +231,7 @@ function Header({
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [stats, setStats] = useState<{ queries?: number; positive?: number; negative?: number } | null>(null);
   const [vectorStatus, setVectorStatus] = useState<{ fileCounts?: { completed?: number; in_progress?: number; failed?: number; cancelled?: number } } | null>(null);
+  const [personalNotifications, setPersonalNotifications] = useState<Array<{ id: number; title: string; detail: string; createdAt: string }>>([]);
   const notificationRef = useRef<HTMLDivElement | null>(null);
   const profileRef = useRef<HTMLDivElement | null>(null);
   const notifications = useMemo(() => {
@@ -248,7 +241,7 @@ function Header({
     const totalFeedback = (stats?.positive ?? 0) + (stats?.negative ?? 0);
     return [
       {
-        title: completed ? `${completed} documents indexed` : "Vector store is connected",
+        title: completed ? `${completed} documents indexed` : "Knowledge base is connected",
         detail: processing ? `${processing} documents are still processing.` : "Document pipeline is ready for retrieval.",
         tone: failed ? "warning" : "success",
       },
@@ -266,6 +259,7 @@ function Header({
   }, [stats, vectorStatus]);
 
   useEffect(() => {
+    if (user.role !== "Admin") return;
     void Promise.all([
       fetch("/api/admin/stats").then((response) => response.json()),
       fetch("/api/openai/status").then((response) => response.json()),
@@ -275,7 +269,20 @@ function Header({
         setVectorStatus(statusData);
       })
       .catch(() => undefined);
-  }, []);
+  }, [user.role]);
+
+  const loadPersonalNotifications = useCallback(() => {
+    void fetch("/api/notifications")
+      .then((response) => response.json())
+      .then((data) => setPersonalNotifications(data.notifications || []))
+      .catch(() => undefined);
+  }, [user.id]);
+
+  useEffect(() => {
+    loadPersonalNotifications();
+    const interval = window.setInterval(loadPersonalNotifications, 5000);
+    return () => window.clearInterval(interval);
+  }, [loadPersonalNotifications]);
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -318,10 +325,10 @@ function Header({
             <div className="notification-panel" role="dialog" aria-label="Notifications">
               <div className="notification-head">
                 <strong>Notifications</strong>
-                <span>{notifications.length} updates</span>
+                <span>{notifications.length + personalNotifications.length} updates</span>
               </div>
               <div className="notification-list">
-                {notifications.map((item) => (
+                {[...personalNotifications.map((item) => ({ ...item, tone: "success" })), ...notifications].map((item) => (
                   <div className="notification-item" key={item.title}>
                     <span className={`notification-status ${item.tone}`} />
                     <span>
@@ -358,212 +365,35 @@ function Header({
   );
 }
 
-function CreateProjectModal({
-  close,
-  onCreated,
-}: {
-  close: () => void;
-  onCreated: (project: Project) => void;
-}) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  const create = async () => {
-    const projectName = name.trim();
-    if (!projectName) {
-      setError("Enter a project name.");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    try {
-      const response = await fetch("/api/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: projectName, description: description.trim() }),
-      });
-      const data = (await response.json()) as { project?: Project; error?: string };
-      if (!response.ok || !data.project) throw new Error(data.error || "Unable to create the project.");
-      onCreated(data.project);
-    } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "Unable to create the project.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
-      <div className="modal project-modal" role="dialog" aria-modal="true" aria-labelledby="create-project-title">
-        <div className="modal-head">
-          <div>
-            <h2 id="create-project-title">Create project</h2>
-            <p>Organize a dedicated knowledge workspace for your team.</p>
-          </div>
-          <button className="icon-btn" type="button" aria-label="Close" onClick={close}><X size={20} /></button>
-        </div>
-        <div className="project-form">
-          <label className="field-label">
-            Project name
-            <input autoFocus maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Forest research" onKeyDown={(event) => { if (event.key === "Enter") void create(); }} />
-          </label>
-          <label className="field-label">
-            Description <small>Optional</small>
-            <textarea rows={3} maxLength={240} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What knowledge will this project contain?" />
-          </label>
-          {error && <p className="form-error">{error}</p>}
-        </div>
-        <div className="modal-actions">
-          <button className="secondary" type="button" onClick={close}>Cancel</button>
-          <button className="primary" type="button" onClick={() => void create()} disabled={saving}>{saving ? "Creatingâ€¦" : "Create project"}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function UploadModal({ close }: { close: () => void }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [folder, setFolder] = useState("Uploaded documents");
-  const [accessGroup, setAccessGroup] = useState("all");
-  const [chunkSize, setChunkSize] = useState(800);
-  const [chunkOverlap, setChunkOverlap] = useState(160);
-  const [uploading, setUploading] = useState(false);
-  const [uploaded, setUploaded] = useState(false);
-  const [error, setError] = useState("");
-
-  const upload = async () => {
-    if (!file) return setError("Choose a document before uploading.");
-    setUploading(true);
-    setError("");
-    const form = new FormData();
-    form.append("file", file);
-    form.append("folder", folder);
-    form.append("uploadedBy", "Seshu");
-    form.append("accessGroup", accessGroup);
-    form.append("chunkSize", String(chunkSize));
-    form.append("chunkOverlap", String(chunkOverlap));
-    try {
-      const response = await fetch("/api/documents/upload", {
-        method: "POST",
-        body: form,
-      });
-      const data = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(data.error || "Upload failed.");
-      setUploaded(true);
-    } catch (uploadError) {
-      setError(
-        uploadError instanceof Error ? uploadError.message : "Upload failed.",
-      );
-    } finally {
-      setUploading(false);
-    }
-  };
-  return (
-    <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true">
-        <div className="modal-head">
-          <div>
-            <h2>Upload documents</h2>
-            <p>Add files to your shared knowledge collection.</p>
-          </div>
-          <button className="icon-btn" onClick={close}>
-            <X size={20} />
-          </button>
-        </div>
-        {uploaded ? (
-          <div className="upload-success">
-            <span>
-              <FileCheck2 size={28} />
-            </span>
-            <h3>Document indexed</h3>
-            <p>
-              {file?.name} is now available in the shared OpenAI vector store.
-            </p>
-            <button className="primary" onClick={close}>
-              Done
-            </button>
-          </div>
-        ) : (
-          <>
-            <label className="dropzone">
-              <span>
-                <Upload size={24} />
-              </span>
-              <strong>{file ? file.name : "Choose a file to upload"}</strong>
-              <small>PDF, DOCX, XLSX, PPTX, TXT and images up to 50 MB</small>
-              <input
-                type="file"
-                hidden
-                onChange={(event) => {
-                  const selected = event.target.files?.[0] ?? null;
-                  setFile(selected);
-                  const extension = selected?.name.split(".").pop()?.toLowerCase();
-                  if (extension === "pptx") { setChunkSize(500); setChunkOverlap(100); }
-                  else if (extension === "txt" || extension === "md") { setChunkSize(600); setChunkOverlap(120); }
-                  else { setChunkSize(800); setChunkOverlap(160); }
-                }}
-              />
-            </label>
-            <label className="field-label">
-              Destination collection
-              <select value={folder} onChange={(event) => setFolder(event.target.value)}>
-                <option>Uploaded documents</option>
-              </select>
-            </label>
-            <label className="field-label">
-              Permitted access
-              <select value={accessGroup} onChange={(event) => setAccessGroup(event.target.value)}>
-                <option value="all">All permitted users</option>
-                <option value="contributors">Contributors and admins</option>
-                <option value="admins">Admins only</option>
-              </select>
-            </label>
-            <details className="indexing-options">
-              <summary>Advanced indexing</summary>
-              <p>Smaller chunks improve precise lookups; larger chunks retain more surrounding context.</p>
-              <div>
-                <label className="field-label">Chunk size (tokens)<input type="number" min="100" max="4096" value={chunkSize} onChange={(event) => setChunkSize(Number(event.target.value))} /></label>
-                <label className="field-label">Chunk overlap<input type="number" min="0" max={Math.floor(chunkSize / 2)} value={chunkOverlap} onChange={(event) => setChunkOverlap(Number(event.target.value))} /></label>
-              </div>
-            </details>
-            {error && <p className="form-error">{error}</p>}
-            <div className="modal-actions">
-              <button className="secondary" onClick={close}>
-                Cancel
-              </button>
-              <button className="primary" onClick={upload} disabled={uploading}>
-                {uploading ? "Uploading and indexingâ€¦" : "Upload file"}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function KnowledgeView({ project }: { project: Project | null }) {
-  const [upload, setUpload] = useState(false);
+function KnowledgeView({ role }: { role: Role }) {
   const [filter, setFilter] = useState("");
   const [selectedCollection, setSelectedCollection] = useState("all");
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [selectedType, setSelectedType] = useState("all");
+  const [selectedOwner, setSelectedOwner] = useState("all");
+  const [selectedStatus, setSelectedStatus] = useState("all");
   const [liveDocuments, setLiveDocuments] = useState<KnowledgeDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [openingDocument, setOpeningDocument] = useState<string | null>(null);
+  const [actionDocumentId, setActionDocumentId] = useState<string | null>(null);
+  const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
+  const [documentNotice, setDocumentNotice] = useState("");
+  const filterRef = useRef<HTMLDivElement | null>(null);
+  const actionMenuRef = useRef<HTMLDivElement | null>(null);
   const loadDocuments = async () => {
     setLoading(true);
     try {
       const response = await fetch("/api/documents/list");
       const data = (await response.json()) as {
-        files?: Array<{ id: string; name: string; bytes: number; status: string; folder: string; owner: string; createdAt: number }>;
+        files?: Array<{ id: string; name: string; bytes: number; status: string; folder: string; owner: string; createdAt: number; dropboxPath?: string; dropboxFileId?: string }>;
         error?: string;
         model?: string;
       };
       if (!response.ok) throw new Error(data.error || "Unable to load documents.");
       setLiveDocuments((data.files || []).map((file) => ({
         id: file.id,
+        documentId: file.id,
         name: file.name,
         type: file.name.split(".").pop()?.toUpperCase() || "FILE",
         folder: displayKnowledgeFolder(file.folder, file.owner),
@@ -572,6 +402,8 @@ function KnowledgeView({ project }: { project: Project | null }) {
         updated: new Date(file.createdAt * 1000).toLocaleDateString(),
         status: file.status === "completed" ? "Indexed" : file.status,
         size: file.bytes ? `${(file.bytes / 1024 / 1024).toFixed(1)} MB` : "-",
+        dropboxPath: file.dropboxPath,
+        dropboxFileId: "dropboxFileId" in file ? String(file.dropboxFileId || "") : "",
       })));
       setLoadError("");
     } catch (error) {
@@ -584,38 +416,98 @@ function KnowledgeView({ project }: { project: Project | null }) {
     const timer = window.setTimeout(() => { void loadDocuments(); }, 0);
     return () => window.clearTimeout(timer);
   }, []);
-  const collectionCounts = useMemo(() => ({
-    all: liveDocuments.length,
-    uploaded: liveDocuments.filter((document) => document.folder === "Uploaded documents").length,
-    mine: liveDocuments.filter((document) => document.owner === "Seshu").length,
-    imports: liveDocuments.filter((document) => document.folder === "Vector store imports").length,
+  useEffect(() => {
+    function closeOnOutsideClick(event: MouseEvent) {
+      const target = event.target as Node;
+      if (filterRef.current && !filterRef.current.contains(target)) {
+        setFilterOpen(false);
+      }
+      if (actionMenuRef.current && !actionMenuRef.current.contains(target)) {
+        setActionDocumentId(null);
+      }
+    }
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, []);
+  const collections = useMemo(() => {
+    const counts = new Map<string, number>();
+    liveDocuments.forEach((document) => {
+      const collection = document.folder || "Approved documents";
+      counts.set(collection, (counts.get(collection) || 0) + 1);
+    });
+
+    return [
+      { id: "all", label: "All knowledge", count: liveDocuments.length, icon: FolderOpen },
+      ...Array.from(counts.entries())
+        .sort(([first], [second]) => first.localeCompare(second))
+        .map(([label, count]) => ({ id: label, label, count, icon: Folder })),
+    ];
+  }, [liveDocuments]);
+  const filterOptions = useMemo(() => ({
+    types: Array.from(new Set(liveDocuments.map((document) => document.type).filter(Boolean))).sort(),
+    owners: Array.from(new Set(liveDocuments.map((document) => document.owner).filter(Boolean))).sort(),
+    statuses: Array.from(new Set(liveDocuments.map((document) => document.status).filter(Boolean))).sort(),
   }), [liveDocuments]);
-  const collections = [
-    { id: "all", label: "All knowledge", count: collectionCounts.all, icon: FolderOpen },
-    { id: "uploaded", label: "Uploaded documents", count: collectionCounts.uploaded, icon: Folder },
-    { id: "mine", label: "My uploads", count: collectionCounts.mine, icon: Folder },
-    { id: "imports", label: "Vector store imports", count: collectionCounts.imports, icon: Folder },
-  ].filter((collection) => collection.id === "all" || collection.count > 0);
+  const activeFilterCount = [selectedType, selectedOwner, selectedStatus].filter((value) => value !== "all").length;
   const filtered = liveDocuments.filter((document) => {
     if (!document.name.toLowerCase().includes(filter.toLowerCase())) return false;
-    if (selectedCollection === "uploaded") return document.folder === "Uploaded documents";
-    if (selectedCollection === "mine") return document.owner === "Seshu";
-    if (selectedCollection === "imports") return document.folder === "Vector store imports";
+    if (selectedCollection !== "all" && document.folder !== selectedCollection) return false;
+    if (selectedType !== "all" && document.type !== selectedType) return false;
+    if (selectedOwner !== "all" && document.owner !== selectedOwner) return false;
+    if (selectedStatus !== "all" && document.status !== selectedStatus) return false;
     return true;
   });
+  const clearDocumentFilters = () => {
+    setSelectedType("all");
+    setSelectedOwner("all");
+    setSelectedStatus("all");
+  };
+  const openDocument = async (document: KnowledgeDocument) => {
+    if (!document.dropboxPath || openingDocument) return;
+    setOpeningDocument(document.id);
+    const params = new URLSearchParams({
+      path: document.dropboxPath,
+      name: document.name,
+    });
+    window.open(`/api/documents/view?${params.toString()}`, "_blank", "noopener,noreferrer");
+    window.setTimeout(() => setOpeningDocument(null), 500);
+  };
+  const deleteDocument = async (document: KnowledgeDocument) => {
+    if (role !== "Admin" || deletingDocumentId) return;
+    const confirmed = window.confirm(`Remove "${document.name}" from knowledge retrieval? The Dropbox file will not be deleted.`);
+    if (!confirmed) return;
+    setDeletingDocumentId(document.id);
+    setDocumentNotice("");
+    try {
+      const response = await fetch("/api/documents/delete", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dropboxPath: document.dropboxPath,
+          fileName: document.name,
+          dropboxFileId: document.dropboxFileId,
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(data.error || "Unable to remove document.");
+      setLiveDocuments((current) => current.filter((item) => item.id !== document.id));
+      setActionDocumentId(null);
+      setDocumentNotice(`Removed ${document.name} from knowledge retrieval.`);
+    } catch (error) {
+      setDocumentNotice(error instanceof Error ? error.message : "Unable to remove document.");
+    } finally {
+      setDeletingDocumentId(null);
+    }
+  };
   return (
     <div className="page knowledge-page">
       <div className="page-lead">
         <div>
           <h2>Knowledge explorer</h2>
           <p>
-            Browse documents indexed in <strong>{project?.name || "your permitted knowledge"}</strong>.
+            Browse documents indexed in <strong>your permitted knowledge</strong>.
           </p>
         </div>
-        <button className="primary" onClick={() => setUpload(true)}>
-          <Upload size={17} />
-          Upload documents
-        </button>
       </div>
       <div className="knowledge-layout">
         <aside className="folder-panel">
@@ -642,10 +534,44 @@ function KnowledgeView({ project }: { project: Project | null }) {
                 placeholder="Search documents"
               />
             </div>
-            <button className="secondary">
-              <Filter size={16} />
-              Filter
-            </button>
+            <div className="document-filter-wrap" ref={filterRef}>
+              <button
+                className={`secondary ${activeFilterCount ? "active-filter" : ""}`}
+                aria-expanded={filterOpen}
+                onClick={() => setFilterOpen((open) => !open)}
+              >
+                <Filter size={16} />
+                Filter{activeFilterCount ? ` (${activeFilterCount})` : ""}
+              </button>
+              {filterOpen && (
+                <div className="document-filter-menu" role="dialog" aria-label="Document filters">
+                  <label>
+                    File type
+                    <select value={selectedType} onChange={(event) => setSelectedType(event.target.value)}>
+                      <option value="all">All file types</option>
+                      {filterOptions.types.map((type) => <option key={type} value={type}>{type}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Owner
+                    <select value={selectedOwner} onChange={(event) => setSelectedOwner(event.target.value)}>
+                      <option value="all">All owners</option>
+                      {filterOptions.owners.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Status
+                    <select value={selectedStatus} onChange={(event) => setSelectedStatus(event.target.value)}>
+                      <option value="all">All statuses</option>
+                      {filterOptions.statuses.map((status) => <option key={status} value={status}>{status}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" className="secondary clear-document-filters" onClick={clearDocumentFilters}>
+                    Clear filters
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
           <div className="table document-table">
             <div className="tr th">
@@ -654,13 +580,26 @@ function KnowledgeView({ project }: { project: Project | null }) {
               <span>Owner</span>
               <span>Updated</span>
               <span>Status</span>
-              <span />
+              <span>View</span>
             </div>
-            {loading && <div className="empty-knowledge">Loading documents from your vector store...</div>}
+            {loading && <div className="empty-knowledge">Loading approved documents...</div>}
+            {!loading && documentNotice && <div className="empty-knowledge knowledge-notice">{documentNotice}</div>}
             {!loading && loadError && <div className="empty-knowledge error-state">{loadError}</div>}
             {!loading && !loadError && filtered.length === 0 && <div className="empty-knowledge">No documents found in this collection.</div>}
             {!loading && !loadError && filtered.map((doc) => (
-              <div className="tr" key={doc.id}>
+              <div
+                className={`tr ${doc.dropboxPath ? "openable" : ""}`}
+                key={doc.id}
+                onClick={() => void openDocument(doc)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    void openDocument(doc);
+                  }
+                }}
+                role={doc.dropboxPath ? "button" : undefined}
+                tabIndex={doc.dropboxPath ? 0 : undefined}
+              >
                 <span className="file-name">
                   <i>
                     <FileText size={18} />
@@ -680,48 +619,131 @@ function KnowledgeView({ project }: { project: Project | null }) {
                     {doc.status}
                   </em>
                 </span>
-                <button className="icon-btn">
-                  <MoreHorizontal size={18} />
-                </button>
+                <span>
+                  {role === "Admin" ? (
+                    <div className="document-action-wrap" ref={actionDocumentId === doc.id ? actionMenuRef : undefined}>
+                      <button
+                        className="icon-btn"
+                        disabled={deletingDocumentId === doc.id}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setActionDocumentId((current) => current === doc.id ? null : doc.id);
+                        }}
+                        title="Document actions"
+                        aria-label={`Actions for ${doc.name}`}
+                        aria-expanded={actionDocumentId === doc.id}
+                      >
+                        <MoreHorizontal size={17} />
+                      </button>
+                      {actionDocumentId === doc.id && (
+                        <div className="document-action-menu">
+                          <button type="button" disabled={!doc.dropboxPath || openingDocument === doc.id} onClick={(event) => { event.stopPropagation(); void openDocument(doc); }}>
+                            <ExternalLink size={15} />
+                            Open document
+                          </button>
+                          <button type="button" className="danger-menu-action" disabled={deletingDocumentId === doc.id} onClick={(event) => { event.stopPropagation(); void deleteDocument(doc); }}>
+                            <X size={15} />
+                            {deletingDocumentId === doc.id ? "Deleting..." : "Delete from knowledge"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      className="icon-btn"
+                      disabled={!doc.dropboxPath || openingDocument === doc.id}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void openDocument(doc);
+                      }}
+                      title="Open document"
+                      aria-label={`Open ${doc.name}`}
+                    >
+                      <ExternalLink size={16} />
+                    </button>
+                  )}
+                </span>
               </div>
             ))}
           </div>
         </section>
       </div>
-      {upload && <UploadModal close={() => { setUpload(false); void loadDocuments(); }} />}
     </div>
   );
 }
 
-function AskView({ initialQuestion = "What is our approach to regenerative forestry?", conversationId, projectId, projectName, onChatStarted, fresh = false }: { initialQuestion?: string; conversationId: string; projectId: number | null; projectName?: string; onChatStarted: (title: string) => void; fresh?: boolean }) {
-  const [history, setHistory] = useState<Array<{ role: "user" | "assistant"; content: string; citations?: Array<{ fileId: string; filename: string; score?: number; excerpt?: string }> }>>([]);
+type ChatCitation = {
+  fileId: string;
+  filename: string;
+  score?: number;
+  excerpt?: string;
+  dropboxPath?: string;
+  url?: string;
+};
+
+function uniqueCitations(citations: ChatCitation[]) {
+  const seen = new Set<string>();
+  return citations.filter((citation, index) => {
+    const sourceId = citation.dropboxPath || citation.fileId || citation.filename || `source-${index + 1}`;
+    const key = sourceId.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function sourceFileUrl(source: { dropboxPath?: string; fileId?: string; filename: string }, download = false) {
+  const dropboxPath = source.dropboxPath || source.fileId;
+  if (!dropboxPath) return "";
+  const params = new URLSearchParams({
+    path: dropboxPath,
+    name: source.filename,
+  });
+  if (download) params.set("download", "1");
+  return `/api/documents/view?${params.toString()}`;
+}
+
+function openAndDownloadSource(source: { openUrl: string; downloadUrl: string; title: string }) {
+  if (!source.openUrl) return;
+  window.open(source.openUrl, "_blank", "noopener,noreferrer");
+  if (!source.downloadUrl) return;
+  const link = document.createElement("a");
+  link.href = source.downloadUrl;
+  link.download = source.title;
+  link.rel = "noopener noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function AskView({ initialQuestion = "What is our approach to regenerative forestry?", conversationId, onChatStarted, fresh = false }: { initialQuestion?: string; conversationId: string; onChatStarted: (title: string) => void; fresh?: boolean }) {
+  const [history, setHistory] = useState<Array<{ role: "user" | "assistant"; content: string; citations?: ChatCitation[] }>>([]);
   const [query, setQuery] = useState("");
   const [askedQuestion, setAskedQuestion] = useState(initialQuestion);
   const [answer, setAnswer] = useState(
-    "Ask a question to test the documents currently indexed in your OpenAI vector store.",
+    "Ask a question to test the approved knowledge base.",
   );
-  const [liveSources, setLiveSources] = useState<
-    Array<{
-      fileId: string;
-      filename: string;
-      score?: number;
-      excerpt?: string;
-    }>
-  >([]);
+  const [liveSources, setLiveSources] = useState<ChatCitation[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
+  const [feedbackRating, setFeedbackRating] = useState<"up" | "down" | "neutral">("neutral");
+  const [feedbackNote, setFeedbackNote] = useState("");
+  const [feedbackNotice, setFeedbackNotice] = useState("");
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  const [submittedFeedbackRating, setSubmittedFeedbackRating] = useState<"up" | "down" | "neutral" | null>(null);
   const [details, setDetails] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const sessionId = conversationId;
 
   useEffect(() => {
     if (fresh) return;
-    void fetch(`/api/conversations?id=${encodeURIComponent(sessionId)}&title=${encodeURIComponent(initialQuestion)}&projectId=${projectId ?? "unassigned"}`)
+    void fetch(`/api/conversations?id=${encodeURIComponent(sessionId)}&title=${encodeURIComponent(initialQuestion)}&projectId=unassigned`)
       .then((response) => response.json())
       .then((data) => {
         if (!data?.messages?.length) return;
-        const restored = data.messages.map((message: { role: "user" | "assistant"; content: string; citations?: Array<{ fileId: string; filename: string; score?: number; excerpt?: string }> }) => ({ role: message.role, content: message.content, citations: message.citations || [] }));
+        const restored = data.messages.map((message: { role: "user" | "assistant"; content: string; citations?: ChatCitation[] }) => ({ role: message.role, content: message.content, citations: uniqueCitations(message.citations || []) }));
         setHistory(restored);
         const lastWithCitations = [...restored].reverse().find((message) => message.citations?.length);
         if (lastWithCitations?.citations) { setLiveSources(lastWithCitations.citations); setSourcesOpen(true); }
@@ -731,37 +753,90 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
         if (lastAssistant) setAnswer(lastAssistant.content);
       })
       .catch(() => undefined);
-  }, [sessionId, initialQuestion, fresh, projectId]);
+  }, [sessionId, initialQuestion, fresh]);
 
   const submit = async (question = query) => {
     const message = question.trim();
     if (!message || loading) return;
     setQuery("");
     setAskedQuestion(message);
-    const startedAt = performance.now();
     setLoading(true);
     setError("");
     setFeedback(null);
+    setFeedbackNotice("");
+    setFeedbackSubmitted(false);
+    setSubmittedFeedbackRating(null);
     setLiveSources([]);
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, history, projectName }),
+        body: JSON.stringify({ message, history, sessionId, stream: true }),
       });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || "Unable to search the knowledge base.");
+      }
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("text/event-stream") && response.body) {
+        setAnswer("");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let streamedAnswer = "";
+        let streamedCitations: ChatCitation[] = [];
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split("\n\n");
+          buffer = events.pop() || "";
+          for (const rawEvent of events) {
+            const eventName = rawEvent.split("\n").find((line) => line.startsWith("event:"))?.replace("event:", "").trim();
+            const dataLine = rawEvent.split("\n").find((line) => line.startsWith("data:"));
+            if (!dataLine) continue;
+            const payload = JSON.parse(dataLine.replace("data:", "").trim()) as {
+              delta?: string;
+              answer?: string;
+              citations?: ChatCitation[];
+              error?: string;
+            };
+            if (eventName === "delta" && payload.delta) {
+              streamedAnswer += payload.delta;
+              setAnswer(streamedAnswer);
+            }
+            if (eventName === "done") {
+              streamedAnswer = payload.answer || streamedAnswer || "No answer was returned.";
+              streamedCitations = uniqueCitations(payload.citations || []);
+              setAnswer(streamedAnswer);
+              setLiveSources(streamedCitations);
+              setSourcesOpen(true);
+            }
+            if (eventName === "error") {
+              throw new Error(payload.error || "Unable to search the knowledge base.");
+            }
+          }
+        }
+        const nextHistory = [
+          ...history,
+          { role: "user" as const, content: message },
+          { role: "assistant" as const, content: streamedAnswer || "No answer was returned.", citations: streamedCitations },
+        ].slice(-12);
+        setHistory(nextHistory);
+        void fetch("/api/conversations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId, title: initialQuestion === "What is our approach to regenerative forestry?" ? message : initialQuestion, projectId: null, messages: nextHistory }),
+        }).catch(() => undefined);
+        if (history.length === 0) onChatStarted(message);
+        return;
+      }
       const data = (await response.json()) as {
         answer?: string;
-        citations?: Array<{
-          fileId: string;
-          filename: string;
-          score?: number;
-          excerpt?: string;
-        }>;
+        citations?: ChatCitation[];
         error?: string;
         model?: string;
       };
-      if (!response.ok)
-        throw new Error(data.error || "Unable to search the knowledge base.");
       setAnswer(data.answer || "No answer was returned.");
       const nextHistory = [
         ...history,
@@ -772,12 +847,10 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
       void fetch("/api/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: sessionId, title: initialQuestion === "What is our approach to regenerative forestry?" ? message : initialQuestion, projectId, messages: nextHistory }),
+        body: JSON.stringify({ id: sessionId, title: initialQuestion === "What is our approach to regenerative forestry?" ? message : initialQuestion, projectId: null, messages: nextHistory }),
       }).catch(() => undefined);
       if (history.length === 0) onChatStarted(message);
-      setLiveSources(data.citations || []);
-      const citationScores = (data.citations || []).map((citation) => citation.score).filter((score): score is number => typeof score === "number");
-      void fetch("/api/admin/telemetry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, query: message, model: data.model, latencyMs: Math.round(performance.now() - startedAt), chunks: (data.citations || []).length, topScore: citationScores.length ? Math.max(...citationScores) : null, sources: (data.citations || []).map((citation) => citation.filename) }) });
+      setLiveSources(uniqueCitations(data.citations || []));
       setSourcesOpen(true);
     } catch (chatError) {
       setError(chatError instanceof Error ? chatError.message : "Chat failed.");
@@ -786,25 +859,51 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
     }
   };
 
-  const displayedSources = liveSources.length
-    ? liveSources.map((source) => ({
+  const displayedSources = uniqueCitations(liveSources).slice(0, 1).map((source, index) => ({
         title: source.filename,
         page: null as number | null,
-        score: Math.round((source.score ?? 0) * 100),
+        score: source.score,
+        match: evidenceBand(source.score),
         text: source.excerpt || "This file was cited in the generated answer.",
-        id: source.fileId,
-      }))
-    : [];
+        id: source.dropboxPath || source.fileId || `${source.filename}-${index}`,
+        openUrl: sourceFileUrl(source),
+        downloadUrl: sourceFileUrl(source, true),
+      }));
   const evidenceScores = liveSources.map((source) => source.score).filter((score): score is number => typeof score === "number");
   const evidenceScore = evidenceScores.length ? Math.max(...evidenceScores) : null;
-  const evidenceLevel = loading ? "Assessing evidenceâ€¦" : evidenceBand(evidenceScore);
+  const evidenceLevel = loading ? "Assessing evidence…" : evidenceBand(evidenceScore);
   const evidenceTone = loading ? "assessing" : evidenceLevel.toLowerCase().replace(" ", "-");
+  const sendFeedback = async (rating: "up" | "down" | "neutral", note = "") => {
+    const response = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, rating, note }),
+    });
+    if (!response.ok) throw new Error("Unable to save feedback.");
+    setFeedback(rating === "neutral" ? null : rating);
+    setFeedbackSubmitted(true);
+    setSubmittedFeedbackRating(rating);
+    setFeedbackNotice(note.trim() ? "Feedback note saved." : "Feedback saved.");
+  };
+  const openFeedbackModal = (rating: "up" | "down" | "neutral" = feedback || "neutral") => {
+    setFeedbackRating(rating);
+    setFeedbackNote("");
+    setFeedbackNotice("");
+    setFeedbackModalOpen(true);
+  };
+  const submitFeedbackNote = async () => {
+    try {
+      await sendFeedback(feedbackRating, feedbackNote);
+      setFeedbackModalOpen(false);
+    } catch (feedbackError) {
+      setFeedbackNotice(feedbackError instanceof Error ? feedbackError.message : "Unable to save feedback.");
+    }
+  };
 
   return (
     <div className={`ask-layout ${sourcesOpen ? "with-sources" : ""}`}>
       <main className="ask-main">
         <div className="ask-inner">
-          {projectName && <div className="project-chat-context"><Folder size={16} /><span>Project</span><strong>{projectName}</strong></div>}
           <div className="ask-box">
             <div className="ask-input">
               <Leaf size={21} />
@@ -812,7 +911,7 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void submit()}
-                placeholder="Ask across your permitted knowledgeâ€¦"
+                placeholder="Ask across your permitted knowledge…"
               />
               <button
                 onClick={() => void submit()}
@@ -827,10 +926,9 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
             <div className="conversation-history">
               {history.slice(0, -2).map((message, index) => (
                 <div className={`history-turn ${message.role}`} key={`${message.role}-${index}`}>
-                  <span className={`avatar ${message.role === "user" ? "soft" : "ai-history-mark"}`}>{message.role === "user" ? "S" : <Leaf size={17} />}</span>
                   <div className="history-content">
                     <strong>{message.role === "user" ? "You" : "Beforest AI"}</strong>
-                    <div className="markdown-answer"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>
+                    <div className="markdown-answer"><ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanDisplayText(message.content)}</ReactMarkdown></div>
                   </div>
                 </div>
               ))}
@@ -838,19 +936,15 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
           )}
           <article className="answer">
             <div className="question-row">
-              <span className="avatar soft">S</span>
               <h2>{askedQuestion}</h2>
               <time>Now</time>
             </div>
             <div className="answer-body">
-              <span className="ai-mark">
-                <Leaf size={19} />
-              </span>
               <div>
                 {loading ? (
                   <div className="answer-loading">
                     <i />
-                    <span>Searching your knowledge baseâ€¦</span>
+                    <span>Searching your knowledge base…</span>
                   </div>
                 ) : error ? (
                   <div className="chat-error">
@@ -858,17 +952,24 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
                     <span>{error}</span>
                   </div>
                 ) : (
-                  <div className="live-answer markdown-answer"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div>
+                  <div className="live-answer markdown-answer"><ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanDisplayText(answer)}</ReactMarkdown></div>
                 )}
                 {displayedSources.length > 0 && (
                   <>
                     <h3>Sources ({displayedSources.length})</h3>
                     <div className="citation-list">
                       {displayedSources.map((s) => (
-                        <button key={s.id} onClick={() => setSourcesOpen(true)}>
+                        <button
+                          key={s.id}
+                          disabled={!s.openUrl}
+                          onClick={() => {
+                            openAndDownloadSource(s);
+                          }}
+                          title={s.openUrl ? `Open and download ${s.title}` : "Document file is unavailable"}
+                        >
                           <FileText size={16} />
                           <span>{s.title}</span>
-                          <small>{s.score ? `${s.score}%` : "Cited"}</small>
+                          <small>{s.match}</small>
                           <ExternalLink size={14} />
                         </button>
                       ))}
@@ -887,18 +988,23 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
                     <span>Was this helpful?</span>
                     <button
                       className={feedback === "up" ? "chosen" : ""}
-                      onClick={() => { setFeedback("up"); void fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, rating: "up" }) }); }}
+                      onClick={() => { void sendFeedback("up").catch((feedbackError) => setFeedbackNotice(feedbackError instanceof Error ? feedbackError.message : "Unable to save feedback.")); }}
                     >
                       <ThumbsUp size={18} />
                     </button>
                     <button
                       className={feedback === "down" ? "chosen" : ""}
-                      onClick={() => { setFeedback("down"); void fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, rating: "down" }) }); }}
+                      onClick={() => { setFeedback("down"); openFeedbackModal("down"); }}
                     >
                       <ThumbsDown size={18} />
                     </button>
+                    <button className={`write-feedback-button ${feedbackSubmitted ? "submitted" : ""}`} onClick={() => openFeedbackModal(submittedFeedbackRating || feedback || "neutral")}>
+                      <MessageSquareText size={16} />
+                      {feedbackSubmitted ? "Submitted" : "Write feedback"}
+                    </button>
                   </div>
                 </div>
+                {feedbackNotice && <p className="feedback-save-notice">{feedbackNotice}</p>}
                 <button
                   className="details-button"
                   onClick={() => setDetails(!details)}
@@ -910,15 +1016,15 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
                   <div className="retrieval-details">
                     <div>
                       <span>Candidate chunks</span>
-                      <strong>{displayedSources.length || "â€”"}</strong>
+                      <strong>{displayedSources.length}</strong>
                     </div>
                     <div>
                       <span>Selected chunks</span>
-                      <strong>{displayedSources.length || "â€”"}</strong>
+                      <strong>{displayedSources.length}</strong>
                     </div>
                     <div>
                       <span>Provider</span>
-                      <strong>OpenAI</strong>
+                      <strong>Knowledge base</strong>
                     </div>
                     <div>
                       <span>Mode</span>
@@ -936,7 +1042,7 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
           <div className="sources-head">
             <div>
               <h2>Sources</h2>
-              <p>{displayedSources.length} selected Â· sorted by relevance</p>
+              <p>{displayedSources.length} selected · sorted by relevance</p>
             </div>
             <button className="icon-btn" onClick={() => setSourcesOpen(false)}>
               <X size={19} />
@@ -950,12 +1056,18 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
                     <FileText size={17} />
                   </span>
                   <strong>{s.title}</strong>
-                  <small>{s.score ? `${s.score}%` : "Cited"}</small>
+                  <small>{s.match}</small>
                 </div>
                 <p>{s.text}</p>
                 <footer>
-                  {s.score ? `${s.score}% relevant` : "Cited source"}{" "}
-                  <button>
+                  {s.match} source{" "}
+                  <button
+                    disabled={!s.openUrl}
+                    onClick={() => {
+                      openAndDownloadSource(s);
+                    }}
+                    title={s.openUrl ? `Open and download ${s.title}` : "Document file is unavailable"}
+                  >
                     Open <ExternalLink size={13} />
                   </button>
                 </footer>
@@ -966,11 +1078,41 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
               <FileText size={22} />
               <strong>No sources yet</strong>
               <span>
-                Ask a question to retrieve evidence from your vector store.
+                Ask a question to retrieve evidence from your approved knowledge base.
               </span>
             </div>
           )}
         </aside>
+      )}
+      {feedbackModalOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setFeedbackModalOpen(false)}>
+          <div className="modal feedback-modal" role="dialog" aria-modal="true" aria-labelledby="feedback-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div>
+                <h2 id="feedback-title">Write feedback</h2>
+                <p>Tell us what was helpful or what went wrong.</p>
+              </div>
+              <button className="icon-btn" onClick={() => setFeedbackModalOpen(false)}><X size={18} /></button>
+            </div>
+            <label>
+              Feedback type
+              <select value={feedbackRating} onChange={(event) => setFeedbackRating(event.target.value as "up" | "down" | "neutral")}>
+                <option value="up">Positive</option>
+                <option value="down">Negative</option>
+                <option value="neutral">Neutral / general feedback</option>
+              </select>
+            </label>
+            <label>
+              Feedback message
+              <textarea value={feedbackNote} onChange={(event) => setFeedbackNote(event.target.value)} placeholder="Example: The answer used the wrong source, missed a document, or the explanation was unclear." />
+            </label>
+            {feedbackNotice && <p className="feedback-save-notice">{feedbackNotice}</p>}
+            <div className="modal-actions">
+              <button className="secondary" onClick={() => setFeedbackModalOpen(false)}>Cancel</button>
+              <button className="primary" onClick={() => void submitFeedbackNote()}>Submit feedback</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1008,7 +1150,7 @@ function WebView() {
       {searched && (
         <div className="web-results">
           <div className="results-head">
-            <span>Results for â€œ{query}â€</span>
+            <span>Results for “{query}”</span>
             <button className="secondary">
               <SlidersHorizontal size={16} />
               Search settings
@@ -1016,7 +1158,7 @@ function WebView() {
           </div>
           {[
             [
-              "National Agroforestry Policy â€” Ministry of Agriculture",
+              "National Agroforestry Policy — Ministry of Agriculture",
               "agri.gov.in",
               "Policy guidance for expanding tree cover, improving rural livelihoods, and building climate resilience through agroforestry systems.",
             ],
@@ -1061,14 +1203,13 @@ const adminTabs = [
   "Search history",
   "Retrieval quality",
   "Feedback",
-  "Models & prompts",
   "Settings",
   "Appearance",
 ];
 
 function AdminOverview({ onViewAll }: { onViewAll?: () => void }) {
   const [stats, setStats] = useState<{ activeUsers: number; queries: number; positive: number; negative: number } | null>(null);
-  const [telemetry, setTelemetry] = useState<{ rows: Array<{ query: string; model?: string; latencyMs?: number; chunks: number; topScore?: number | null; feedback?: "up" | "down"; resolution?: string | null }>; averageLatencyMs?: number | null } | null>(null);
+  const [telemetry, setTelemetry] = useState<{ rows: Array<{ userName?: string; query: string; model?: string; latencyMs?: number; chunks: number; topScore?: number | null; feedback?: "up" | "down"; resolution?: string | null }>; averageLatencyMs?: number | null } | null>(null);
   const [vectorStatus, setVectorStatus] = useState<{ fileCounts?: { completed?: number; in_progress?: number; failed?: number; cancelled?: number } } | null>(null);
   useEffect(() => { void fetch("/api/admin/stats").then((r) => r.json()).then(setStats).catch(() => undefined); }, []);
   useEffect(() => { void fetch("/api/admin/telemetry").then((r) => r.json()).then(setTelemetry).catch(() => undefined); }, []);
@@ -1078,11 +1219,11 @@ function AdminOverview({ onViewAll }: { onViewAll?: () => void }) {
     <>
       <div className="metric-strip">
         {[
-          ["Active users", "â€”", "Not connected"],
-          ["Queries this month", "â€”", "Not connected"],
-          ["Positive feedback", "â€”", "No feedback yet"],
-          ["Avg. response time", "â€”", "Awaiting telemetry"],
-          ["Documents", "â€”", "Vector store"],
+          ["Active users", "—", "Not connected"],
+          ["Queries this month", "—", "Not connected"],
+          ["Positive feedback", "—", "No feedback yet"],
+          ["Avg. response time", "—", "Awaiting telemetry"],
+          ["Documents", "—", "Knowledge base"],
           ["Needs review", "0", "Retrieval queue"],
         ].map(([label, value]) => (
           <div key={label}>
@@ -1117,47 +1258,11 @@ function AdminOverview({ onViewAll }: { onViewAll?: () => void }) {
             {!telemetry?.rows.length && <div className="empty-admin-row">No search activity has been recorded yet.</div>}
             {(telemetry?.rows || []).slice(0, 10).map((row, i) => (
               <div className="tr" key={i}>
-                <span>Seshu</span><span>{row.query}</span><span>Internal</span><span>{evidenceBand(row.topScore)}</span><span className={row.feedback === "up" ? "positive" : row.feedback === "down" ? "negative" : ""}>{row.feedback === "up" ? "Positive" : row.feedback === "down" ? "Negative" : "No feedback"}</span><span>{row.latencyMs ? `${row.latencyMs} ms` : "—"}</span>
+                <span>{row.userName || "Unknown user"}</span><span>{row.query}</span><span>Internal</span><span>{evidenceBand(row.topScore)}</span><span className={row.feedback === "up" ? "positive" : row.feedback === "down" ? "negative" : ""}>{row.feedback === "up" ? "Positive" : row.feedback === "down" ? "Negative" : "No feedback"}</span><span>{row.latencyMs ? `${row.latencyMs} ms` : "—"}</span>
               </div>
             ))}
           </div>
         </section>
-        <aside className="admin-section">
-          <div className="section-heading">
-            <div>
-              <h3>Operational health</h3>
-              <p>Document pipeline{vectorStatus ? ` Â· ${vectorStatus.fileCounts?.completed ?? 0} indexed` : ""}</p>
-            </div>
-          </div>
-          <div className="health-list">
-            {[
-              ["Indexed", vectorStatus?.fileCounts?.completed ?? "â€”", "good"],
-              ["Processing", vectorStatus?.fileCounts?.in_progress ?? "â€”", "wait"],
-              ["Needs review", vectorStatus?.fileCounts?.cancelled ?? "â€”", "warn"],
-              ["Failed", vectorStatus?.fileCounts?.failed ?? "â€”", "bad"],
-            ].map(([name, count, tone]) => (
-              <div key={name}>
-                <span><i className={String(tone)} />{name}</span><strong>{count}</strong>
-              </div>
-            ))}
-          </div>
-          <div className="health-list legacy-health-hidden">
-            {[
-              ["Indexed", "â€”", "good"],
-              ["Processing", "â€”", "wait"],
-              ["Needs review", "â€”", "warn"],
-              ["Failed", "â€”", "bad"],
-            ].map(([name, count, tone]) => (
-              <div key={name}>
-                <span>
-                  <i className={tone} />
-                  {name}
-                </span>
-                <strong>{count}</strong>
-              </div>
-            ))}
-          </div>
-        </aside>
       </div>
     </>
   );
@@ -1169,12 +1274,14 @@ function AdminUsers({ currentUser }: { currentUser: AuthUser }) {
   const [menuOpen, setMenuOpen] = useState<number | null>(null);
   const [actionMessage, setActionMessage] = useState("");
   const [users, setUsers] = useState<AuthUser[]>([]);
-  const [form, setForm] = useState({ name: "", email: "", password: "", role: "User" as Role, active: true, mustChangePassword: true });
+  const [teams, setTeams] = useState<Array<{ id: number; name: string }>>([]);
+  const [form, setForm] = useState({ name: "", email: "", password: "", role: "User" as Role, teamId: "" as number | "", active: true, mustChangePassword: true });
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const loadUsers = useCallback(() => {
     void fetch("/api/admin/users").then((r) => r.json()).then((data) => setUsers(data.users || [])).catch(() => setUsers([]));
   }, []);
   useEffect(() => { loadUsers(); }, [loadUsers]);
+  useEffect(() => { void fetch("/api/admin/teams").then((r) => r.json()).then((data) => setTeams(data.teams || [])).catch(() => setTeams([])); }, []);
   useEffect(() => {
     if (!menuOpen) return;
 
@@ -1188,18 +1295,22 @@ function AdminUsers({ currentUser }: { currentUser: AuthUser }) {
   }, [menuOpen]);
   const openCreate = () => {
     setEditingUser(null);
-    setForm({ name: "", email: "", password: "", role: "User", active: true, mustChangePassword: true });
+    setForm({ name: "", email: "", password: "", role: "User", teamId: "", active: true, mustChangePassword: true });
     setInviteOpen(true);
     setActionMessage("");
   };
   const openEdit = (user: AuthUser) => {
     setEditingUser(user);
-    setForm({ name: user.name, email: user.email, password: "", role: user.role, active: user.active, mustChangePassword: false });
+    setForm({ name: user.name, email: user.email, password: "", role: user.role, teamId: user.teamId ?? "", active: user.active, mustChangePassword: false });
     setInviteOpen(true);
     setActionMessage("");
   };
   const saveUser = async () => {
-    const payload = editingUser ? { id: editingUser.id, ...form, password: form.password || undefined } : form;
+    if (!form.teamId) {
+      setActionMessage("Select a team before saving the user.");
+      return;
+    }
+    const payload = editingUser ? { id: editingUser.id, ...form, teamId: Number(form.teamId), password: form.password || undefined } : { ...form, teamId: Number(form.teamId) };
     const response = await fetch("/api/admin/users", { method: editingUser ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -1246,7 +1357,7 @@ function AdminUsers({ currentUser }: { currentUser: AuthUser }) {
       <div className="section-heading">
         <div>
           <h3>Users and roles</h3>
-          <p>Manage access across Admin, Contributor, and User roles.</p>
+          <p>Manage access across Admin and User roles.</p>
         </div>
         <button className="primary" onClick={openCreate}>
           <Users size={16} />
@@ -1284,7 +1395,7 @@ function AdminUsers({ currentUser }: { currentUser: AuthUser }) {
         ))}
       </div>
       {actionMessage && <p className="admin-action-message">{actionMessage}</p>}
-      {inviteOpen && <div className="invite-panel"><div className="invite-head"><h3>{editingUser ? "Edit user" : "Create user credentials"}</h3><button className="icon-btn" onClick={() => setInviteOpen(false)}><X size={17} /></button></div><label>Name<input value={form.name} onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))} placeholder="Full name" /></label><label>Email / username<input type="email" value={form.email} onChange={(e) => setForm((current) => ({ ...current, email: e.target.value }))} placeholder="name@company.com" /></label><label>{editingUser ? "New password (optional)" : "Temporary password"}<input type="password" value={form.password} onChange={(e) => setForm((current) => ({ ...current, password: e.target.value }))} placeholder="Minimum 8 characters" /></label><label>Role<select value={form.role} onChange={(e) => setForm((current) => ({ ...current, role: e.target.value as Role }))}><option>User</option><option>Contributor</option><option>Admin</option></select></label><label>Status<select value={form.active ? "active" : "inactive"} onChange={(e) => setForm((current) => ({ ...current, active: e.target.value === "active" }))}><option value="active">Active</option><option value="inactive">Inactive</option></select></label><label className="checkbox-line"><input type="checkbox" checked={form.mustChangePassword} onChange={(e) => setForm((current) => ({ ...current, mustChangePassword: e.target.checked }))} />Require password change on first login</label><button className="primary" onClick={() => void saveUser()}>{editingUser ? "Save user" : "Create user"}</button></div>}
+      {inviteOpen && <div className="invite-panel"><div className="invite-head"><h3>{editingUser ? "Edit user" : "Create user credentials"}</h3><button className="icon-btn" onClick={() => setInviteOpen(false)}><X size={17} /></button></div><label>Name<input value={form.name} onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))} placeholder="Full name" /></label><label>Email / username<input type="email" value={form.email} onChange={(e) => setForm((current) => ({ ...current, email: e.target.value }))} placeholder="name@company.com" /></label><label>{editingUser ? "New password (optional)" : "Temporary password"}<input type="password" value={form.password} onChange={(e) => setForm((current) => ({ ...current, password: e.target.value }))} placeholder="Minimum 8 characters" /></label><label>Team / collection<select value={form.teamId} onChange={(e) => setForm((current) => ({ ...current, teamId: e.target.value ? Number(e.target.value) : "" }))}><option value="">Select a team</option>{teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label><label>Role<select value={form.role} onChange={(e) => setForm((current) => ({ ...current, role: e.target.value as Role }))}><option>User</option><option>Admin</option></select></label><label>Status<select value={form.active ? "active" : "inactive"} onChange={(e) => setForm((current) => ({ ...current, active: e.target.value === "active" }))}><option value="active">Active</option><option value="inactive">Inactive</option></select></label><label className="checkbox-line"><input type="checkbox" checked={form.mustChangePassword} onChange={(e) => setForm((current) => ({ ...current, mustChangePassword: e.target.checked }))} />Require password change on first login</label><button className="primary" onClick={() => void saveUser()}>{editingUser ? "Save user" : "Create user"}</button></div>}
     </section>
   );
 }
@@ -1306,7 +1417,7 @@ function AdminGeneric({ tab }: { tab: string }) {
             <span>
               <strong>{r[1]}</strong>
               <small>
-                {r[0]} Â· {r[2]}
+                {r[0]} · {r[2]}
               </small>
             </span>
             <span>{r[3]} relevance</span>
@@ -1333,41 +1444,12 @@ function AdminGeneric({ tab }: { tab: string }) {
             </span>
             <span>
               <strong>{r[0]}</strong>
-              <small>{r[1]} Â· Today</small>
+              <small>{r[1]} · Today</small>
             </span>
             <em>{r[2]}</em>
             <button className="secondary">Review</button>
           </div>
         ))}
-      </div></>,
-    ],
-    "Models & prompts": [
-      "Models and prompts",
-      "Version and test the behaviour used for grounded answers.",
-      <><ModelsPrompts key="models" />
-      <div className="settings-form legacy-models-hidden" key="models-legacy">
-        <label>
-          Generation model
-          <select defaultValue="gpt-5-mini">
-            <option>gpt-5-mini</option>
-            <option>gpt-5</option>
-            <option>gpt-4.1</option>
-          </select>
-        </label>
-        <label>
-          Embedding model
-          <select defaultValue="text-embedding-3-small">
-            <option>text-embedding-3-small</option>
-          </select>
-        </label>
-        <label className="span-2">
-          System prompt
-          <textarea defaultValue="You are Beforest AI. Answer only from permitted, relevant evidence. Cite every grounded claim and be transparent when evidence is insufficient." />
-        </label>
-        <div className="span-2 form-actions">
-          <button className="secondary">Test configuration</button>
-          <button className="primary">Save draft</button>
-        </div>
       </div></>,
     ],
     Appearance: [
@@ -1377,38 +1459,8 @@ function AdminGeneric({ tab }: { tab: string }) {
     ],
     Settings: [
       "System settings",
-      "Control retrieval, external search, retention, and notifications.",
-      <><SystemSettings key="settings" />
-      <div className="setting-list legacy-settings-hidden" key="settings-legacy">
-        {[
-          ["External web search", "Allow SearXNG for permitted users", true],
-          [
-            "Contributor approval",
-            "Require admin approval before indexing",
-            true,
-          ],
-          [
-            "Conversation history",
-            "Retain query and answer history for 90 days",
-            true,
-          ],
-          [
-            "Email notifications",
-            "Notify teams about newly published documents",
-            false,
-          ],
-        ].map(([a, b, c]) => (
-          <div key={String(a)}>
-            <span>
-              <strong>{a}</strong>
-              <small>{b}</small>
-            </span>
-            <button className={`toggle ${c ? "on" : ""}`}>
-              <i />
-            </button>
-          </div>
-        ))}
-      </div></>,
+      "Control conversation history, notifications, and answer style.",
+      <SystemSettings key="settings" />,
     ],
   };
   const [title, desc, body] = content[tab];
@@ -1428,22 +1480,109 @@ function AdminGeneric({ tab }: { tab: string }) {
 function AdminDocuments() {
   const [documents, setDocuments] = useState<Array<{ id: string; name: string; status?: string; bytes?: number; owner?: string }>>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  useEffect(() => { void fetch("/api/documents/list").then((r) => r.json()).then((data) => setDocuments(data.files || [])).catch(() => undefined); }, []);
-  if (!documents.length) return <div className="empty-admin-panel">No documents are currently available in the vector store.</div>;
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const loadDocuments = useCallback(() => {
+    setLoading(true);
+    setMessage("");
+    void fetch("/api/documents/list")
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Unable to load documents.");
+        return data;
+      })
+      .then((data) => {
+        const files = data.files || [];
+        setDocuments(files);
+        const owners = Array.from(new Set(files.map((document: { owner?: string }) => document.owner || "Unknown uploader")));
+        setExpanded(Object.fromEntries(owners.map((owner) => [owner, true])));
+      })
+      .catch((error) => {
+        setDocuments([]);
+        setMessage(error instanceof Error ? error.message : "Unable to load documents.");
+      })
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { loadDocuments(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadDocuments]);
+  if (loading) return <div className="empty-admin-panel">Loading approved documents...</div>;
+  if (!documents.length) return <div className="empty-admin-panel">{message || "No approved documents are currently available."}</div>;
   const groups = documents.reduce<Record<string, typeof documents[number][]>>((result, document) => { const owner = document.owner || "Unknown uploader"; (result[owner] ||= []).push(document); return result; }, {});
-  return <div className="admin-documents-list">{Object.entries(groups).map(([owner, files]) => <div className="document-owner-group" key={owner}><button className="document-owner-row" onClick={() => setExpanded((current) => ({ ...current, [owner]: !current[owner] }))}><span><ChevronDown size={16} className={expanded[owner] ? "rotated" : ""} /><strong>{owner}</strong></span><small>{files.length} document{files.length === 1 ? "" : "s"}</small></button>{expanded[owner] && files.map((document) => <div className="admin-document-row" key={document.id}><span><FileText size={17} /><strong>{document.name}</strong></span><small>{document.status || "Indexed"}</small><small>{document.bytes ? `${Math.round(document.bytes / 1024)} KB` : "â€”"}</small></div>)}</div>)}</div>;
+  return <div className="admin-documents-list">{message && <div className="knowledge-notice">{message}</div>}{Object.entries(groups).map(([owner, files]) => <div className="document-owner-group" key={owner}><button className="document-owner-row" onClick={() => setExpanded((current) => ({ ...current, [owner]: !current[owner] }))}><span><ChevronDown size={16} className={expanded[owner] ? "rotated" : ""} /><strong>{owner}</strong></span><small>{files.length} document{files.length === 1 ? "" : "s"}</small></button>{expanded[owner] && files.map((document) => <div className="admin-document-row" key={document.id}><span><FileText size={17} /><strong>{document.name}</strong></span><small>{document.status || "Indexed"}</small><small>{document.bytes ? `${Math.round(document.bytes / 1024)} KB` : "-"}</small><small>Searchable</small></div>)}</div>)}</div>;
 }
 
 function AdminFeedback() {
-  const [items, setItems] = useState<Array<{ id: number; rating: "up" | "down"; query?: string; createdAt: string }>>([]);
+  const [items, setItems] = useState<Array<{ id: number; rating: "up" | "down" | "neutral"; note?: string | null; query?: string; userName?: string; createdAt: string; status?: "open" | "resolved"; resolutionNote?: string | null; notificationSent?: boolean }>>([]);
   const [reviewId, setReviewId] = useState<number | null>(null);
-  useEffect(() => { void fetch("/api/feedback").then((r) => r.json()).then((data) => setItems(data.feedback || [])).catch(() => undefined); }, []);
+  const [resolutionNotes, setResolutionNotes] = useState<Record<number, string>>({});
+  const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const [actionMessage, setActionMessage] = useState("");
+  const load = useCallback(() => { void fetch("/api/feedback").then((r) => r.json()).then((data) => setItems(data.feedback || [])).catch(() => undefined); }, []);
+  useEffect(load, [load]);
+  const resolve = async (id: number) => {
+    setResolvingId(id);
+    setActionMessage("");
+    try {
+      const response = await fetch("/api/feedback", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ feedbackId: id, resolutionNote: resolutionNotes[id] || "" }) });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) {
+        setActionMessage(data.notified ? "Feedback resolved and the user was notified." : "Feedback resolved, but no active user account matched this feedback.");
+        load();
+      } else {
+        setActionMessage(data.error || "Unable to resolve feedback.");
+      }
+    } catch {
+      setActionMessage("Unable to resolve feedback.");
+    } finally {
+      setResolvingId(null);
+    }
+  };
   if (!items.length) return <div className="empty-admin-panel">No feedback has been submitted yet.</div>;
-  return <div className="admin-feedback-list">{items.map((item) => <div className="admin-feedback-item" key={item.id}><div className="admin-feedback-row"><span className={`feedback-badge ${item.rating}`}>{item.rating === "up" ? "Positive" : "Negative"}</span><div><strong>{item.query || "Conversation feedback"}</strong><small>Seshu Â· {new Date(item.createdAt).toLocaleString()}</small></div><button className="secondary" onClick={() => setReviewId(reviewId === item.id ? null : item.id)}>{reviewId === item.id ? "Close" : "Review"}</button></div>{reviewId === item.id && <div className="feedback-review-panel"><strong>Feedback review</strong><span>Rating: {item.rating === "up" ? "Positive" : "Negative"}</span><span>Query: {item.query || "Not available"}</span><span>Submitted: {new Date(item.createdAt).toLocaleString()}</span></div>}</div>)}</div>;
+  const label = (rating: "up" | "down" | "neutral") => rating === "up" ? "Positive" : rating === "down" ? "Negative" : "Neutral";
+  const sortedItems = [...items].sort((a, b) => {
+    const priority = { down: 0, neutral: 1, up: 2 };
+    return priority[a.rating] - priority[b.rating] || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+  return (
+    <div className="admin-feedback-list redesigned">
+      {sortedItems.map((item) => (
+        <div className={`admin-feedback-item feedback-${item.rating}`} key={item.id}>
+          <div className="admin-feedback-row redesigned">
+            <span className={`feedback-badge ${item.rating}`}>{label(item.rating)}</span>
+            <div className="feedback-main">
+              <strong>{item.query || "Conversation feedback"}</strong>
+              <small>{item.userName || "Unknown user"} · {new Date(item.createdAt).toLocaleString()}</small>
+              <p className={item.note ? "feedback-note" : "feedback-note empty"}>{item.note || "No written feedback added."}</p>
+            </div>
+            <div className="feedback-actions"><button className="secondary" onClick={() => setReviewId(reviewId === item.id ? null : item.id)}>{reviewId === item.id ? "Close details" : "View details"}</button><span className={`feedback-status ${item.status === "resolved" ? "resolved" : "open"}`}>{item.status === "resolved" ? "Resolved" : "Open"}</span></div>
+          </div>
+          {reviewId === item.id && (
+            <div className="feedback-review-panel redesigned">
+              <strong>Feedback details</strong>
+              <span>Rating: {label(item.rating)}</span>
+              <span>Query: {item.query || "Not available"}</span>
+              <span>Submitted by: {item.userName || "Unknown user"}</span>
+              <span>Submitted: {new Date(item.createdAt).toLocaleString()}</span>
+              <span>Message: {item.note || "No written feedback added."}</span>
+              {item.status !== "resolved" && <label className="feedback-resolution-label">Resolution note<input value={resolutionNotes[item.id] || ""} onChange={(event) => setResolutionNotes((current) => ({ ...current, [item.id]: event.target.value }))} placeholder="Optional note for the user" /></label>}
+              {item.resolutionNote && <span>Resolution note: {item.resolutionNote}</span>}
+              <div className="feedback-review-actions">
+                {item.status !== "resolved" ? <button className="primary" disabled={resolvingId === item.id} onClick={() => void resolve(item.id)}>{resolvingId === item.id ? "Resolving..." : "Mark resolved"}</button> : !item.notificationSent && <button className="secondary" disabled={resolvingId === item.id} onClick={() => void resolve(item.id)}>Notify user</button>}
+                {item.status === "resolved" && item.notificationSent && <span className="feedback-status resolved">Resolved and notified</span>}
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+      {actionMessage && <p className="admin-action-message">{actionMessage}</p>}
+    </div>
+  );
 }
 
 function AdminSearchHistory() {
-  const [rows, setRows] = useState<Array<{ query: string; latencyMs?: number; chunks: number; topScore?: number | null; sources?: string[]; feedback?: "up" | "down" }>>([]);
+  const [rows, setRows] = useState<Array<{ userName?: string; query: string; latencyMs?: number; chunks: number; topScore?: number | null; sources?: string[]; feedback?: "up" | "down" }>>([]);
   const [traceIndex, setTraceIndex] = useState<number | null>(null);
   const [page, setPage] = useState(1);
   useEffect(() => { void fetch("/api/admin/telemetry").then((r) => r.json()).then((data) => setRows(data.rows || [])).catch(() => undefined); }, []);
@@ -1453,11 +1592,7 @@ function AdminSearchHistory() {
   const safePage = Math.min(page, totalPages);
   const start = (safePage - 1) * pageSize;
   const visibleRows = rows.slice(start, start + pageSize);
-  return <div className="admin-history-list"><div className="admin-history-head"><span>User / query</span><span>Evidence</span><span>Feedback</span><span>Latency</span><span /></div>{visibleRows.map((row, index) => { const absoluteIndex = start + index; return <div className="admin-history-item" key={`${row.query}-${absoluteIndex}`}><div className="admin-history-row"><span><strong>{row.query}</strong><small>Seshu Â· Internal</small></span><span>{evidenceBand(row.topScore)}{typeof row.topScore === "number" ? ` Â· ${row.topScore.toFixed(2)}` : ""}</span><span className={row.feedback === "up" ? "positive" : row.feedback === "down" ? "negative" : ""}>{row.feedback === "up" ? "Positive" : row.feedback === "down" ? "Negative" : "No feedback"}</span><span>{row.latencyMs ? `${row.latencyMs} ms` : "â€”"}</span><button className="secondary" onClick={() => setTraceIndex(traceIndex === absoluteIndex ? null : absoluteIndex)}>{traceIndex === absoluteIndex ? "Hide trace" : "Trace"}</button></div>{traceIndex === absoluteIndex && <div className="trace-details"><strong>Retrieval trace</strong><span>Mode: Hybrid internal search (65% semantic / 35% keyword)</span><span>Selected sources: {row.sources?.length ? row.sources.join(", ") : "None"}</span><span>Selected chunks: {row.chunks}</span><span>Top ranking score: {typeof row.topScore === "number" ? row.topScore.toFixed(3) : "Not available"}</span><span>Feedback: {row.feedback === "up" ? "Positive" : row.feedback === "down" ? "Negative" : "Not provided"}</span></div>}</div>; })}<div className="pagination-bar"><span>Showing {start + 1}-{Math.min(start + pageSize, rows.length)} of {rows.length} searches</span><div><button className="secondary" disabled={safePage === 1} onClick={() => { setTraceIndex(null); setPage((current) => Math.max(1, current - 1)); }}>Previous</button><strong>Page {safePage} of {totalPages}</strong><button className="secondary" disabled={safePage === totalPages} onClick={() => { setTraceIndex(null); setPage((current) => Math.min(totalPages, current + 1)); }}>Next</button></div></div></div>;
-}
-
-function defaultViewForRole(role: Role): View {
-  return role === "Contributor" ? "knowledge" : "ask";
+  return <div className="admin-history-list"><div className="admin-history-head"><span>User / query</span><span>Evidence</span><span>Feedback</span><span>Latency</span><span /></div>{visibleRows.map((row, index) => { const absoluteIndex = start + index; return <div className="admin-history-item" key={`${row.query}-${absoluteIndex}`}><div className="admin-history-row"><span><strong>{row.query}</strong><small>{row.userName || "Unknown user"} · Internal</small></span><span>{evidenceBand(row.topScore)}{typeof row.topScore === "number" ? ` · ${row.topScore.toFixed(2)}` : ""}</span><span className={row.feedback === "up" ? "positive" : row.feedback === "down" ? "negative" : ""}>{row.feedback === "up" ? "Positive" : row.feedback === "down" ? "Negative" : "No feedback"}</span><span>{row.latencyMs ? `${row.latencyMs} ms` : "—"}</span><button className="secondary" onClick={() => setTraceIndex(traceIndex === absoluteIndex ? null : absoluteIndex)}>{traceIndex === absoluteIndex ? "Hide trace" : "Trace"}</button></div>{traceIndex === absoluteIndex && <div className="trace-details"><strong>Retrieval trace</strong><span>Mode: Approved knowledge search</span><span>Selected sources: {row.sources?.length ? row.sources.join(", ") : "None"}</span><span>Selected excerpts: {row.chunks}</span><span>Top relevance score: {typeof row.topScore === "number" ? row.topScore.toFixed(3) : "Not available"}</span><span>Feedback: {row.feedback === "up" ? "Positive" : row.feedback === "down" ? "Negative" : "Not provided"}</span></div>}</div>; })}<div className="pagination-bar"><span>Showing {start + 1}-{Math.min(start + pageSize, rows.length)} of {rows.length} searches</span><div><button className="secondary" disabled={safePage === 1} onClick={() => { setTraceIndex(null); setPage((current) => Math.max(1, current - 1)); }}>Previous</button><strong>Page {safePage} of {totalPages}</strong><button className="secondary" disabled={safePage === totalPages} onClick={() => { setTraceIndex(null); setPage((current) => Math.min(totalPages, current + 1)); }}>Next</button></div></div></div>;
 }
 
 type RetrievalRow = {
@@ -1526,11 +1661,11 @@ function RetrievalQuality() {
     <div className="retrieval-sop">
       <strong>Admin glossary / SOP</strong>
       <div>
-        <span><b>Low score but source is correct:</b> Document may need better chunking or metadata.</span>
+        <span><b>Low score but source is correct:</b> Document may need better metadata or source preparation.</span>
         <span><b>Wrong document retrieved:</b> Add clearer filename/folder metadata or improve query expansion.</span>
-        <span><b>No chunks selected:</b> Check whether the document is indexed in the vector store.</span>
+        <span><b>No excerpts selected:</b> Check whether the document is available in the approved knowledge base.</span>
         <span><b>User gave thumbs down:</b> Review answer quality and source match.</span>
-        <span><b>Knowledge missing:</b> Upload the missing document or mark it as a knowledge gap.</span>
+        <span><b>Knowledge missing:</b> Approve the missing document or mark it as a knowledge gap.</span>
       </div>
     </div>
     <div className="quality-subtabs">
@@ -1569,27 +1704,34 @@ function AppearanceSettings() {
   return <div className="settings-form"><label>Sidebar color (hex)<input value={sidebar} onChange={(e) => setSidebar(e.target.value)} placeholder="#064c3d" /></label><label>Accent color (hex)<input value={accent} onChange={(e) => setAccent(e.target.value)} placeholder="#2a7f62" /></label><label>Leaf icon style<select defaultValue="leaf"><option value="leaf">Leaf</option><option value="minimal">Minimal</option></select></label><label>Leaf thumbnail<input type="file" accept="image/*" onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setThumbnail(String(reader.result)); reader.readAsDataURL(file); }} /></label>{thumbnail && <img className="appearance-preview" src={thumbnail} alt="Leaf thumbnail preview" />}<div className="span-2 form-actions"><button className="primary" onClick={save}>Save appearance</button></div>{saveMessage && <p className="admin-action-message">{saveMessage}</p>}</div>;
 }
 
-function ModelsPrompts() {
-  const [generationModel, setGenerationModel] = useState("gpt-5-mini");
-  const [embeddingModel, setEmbeddingModel] = useState("text-embedding-3-small");
-  const [systemPrompt, setSystemPrompt] = useState("You are Beforest AI. Answer only from permitted, relevant evidence. Cite every grounded claim and be transparent when evidence is insufficient.");
-  const [message, setMessage] = useState("");
-  useEffect(() => { void fetch("/api/admin/models").then((r) => r.json()).then((data) => { if (!data.config) return; setGenerationModel(data.config.generationModel); setEmbeddingModel(data.config.embeddingModel); setSystemPrompt(data.config.systemPrompt); }).catch(() => undefined); }, []);
-  const save = async (active: boolean) => { const response = await fetch("/api/admin/models", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ generationModel, embeddingModel, systemPrompt, active }) }); setMessage(response.ok ? (active ? "Configuration activated." : "Draft saved.") : "Unable to save configuration."); };
-  return <div className="settings-form"><label>Generation model<select value={generationModel} onChange={(e) => setGenerationModel(e.target.value)}><option>gpt-5-mini</option><option>gpt-5</option><option>gpt-4.1</option></select></label><label>Embedding and indexing<input value="Managed by OpenAI vector store" readOnly /><small>The hosted vector store manages embeddings automatically. The saved model value is retained for configuration history.</small></label><label className="span-2">System prompt<textarea value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} /></label><div className="span-2 form-actions"><button className="secondary" onClick={() => setMessage("Configuration fields validated.")}>Test configuration</button><button className="secondary" onClick={() => void save(false)}>Save draft</button><button className="primary" onClick={() => void save(true)}>Set active</button></div>{message && <p className="admin-action-message">{message}</p>}</div>;
-}
-
 function SystemSettings() {
-  const defaults = { webSearch: true, contributorApproval: true, conversationHistory: true, emailNotifications: false };
+  const defaults = useMemo(() => ({ conversationHistory: true, emailNotifications: false }), []);
   const [settings, setSettings] = useState(defaults);
-  useEffect(() => { void fetch("/api/admin/settings").then((r) => r.json()).then((data) => { const next = { ...defaults }; for (const item of data.settings || []) if (item.key in next) next[item.key as keyof typeof next] = item.value === "true"; setSettings(next); }).catch(() => undefined); }, []);
+  const [systemPrompt, setSystemPrompt] = useState(DEFAULT_KNOWLEDGE_SYSTEM_PROMPT);
+  const [promptStatus, setPromptStatus] = useState("");
+  useEffect(() => { void fetch("/api/admin/settings").then((r) => r.json()).then((data) => { const next = { ...defaults }; for (const item of data.settings || []) { if (item.key in next) next[item.key as keyof typeof next] = item.value === "true"; if (item.key === "knowledge.systemPrompt") setSystemPrompt(item.value || DEFAULT_KNOWLEDGE_SYSTEM_PROMPT); } setSettings(next); }).catch(() => undefined); }, [defaults]);
   const toggle = (key: keyof typeof settings) => { const value = !settings[key]; setSettings((current) => ({ ...current, [key]: value })); void fetch("/api/admin/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, value }) }); };
-  const rows: Array<[keyof typeof settings, string, string]> = [["webSearch", "External web search", "Allow SearXNG for permitted users"], ["contributorApproval", "Contributor approval", "Require admin approval before indexing"], ["conversationHistory", "Conversation history", "Retain query and answer history for 90 days"], ["emailNotifications", "Email notifications", "Notify teams about newly published documents"]];
-  return <div className="setting-list">{rows.map(([key, title, description]) => <div key={key}><span><strong>{title}</strong><small>{description}</small></span><button className={`toggle ${settings[key] ? "on" : ""}`} onClick={() => toggle(key)}><i /></button></div>)}</div>;
+  const savePrompt = async () => {
+    const trimmed = systemPrompt.trim();
+    if (trimmed.length < 80) {
+      setPromptStatus("Prompt is too short. Add tone, structure, and accuracy rules.");
+      return;
+    }
+    const response = await fetch("/api/admin/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: "knowledge.systemPrompt", value: trimmed }) });
+    setPromptStatus(response.ok ? "System prompt saved." : "Unable to save system prompt.");
+  };
+  const resetPrompt = () => {
+    setSystemPrompt(DEFAULT_KNOWLEDGE_SYSTEM_PROMPT);
+    setPromptStatus("Default prompt restored locally. Save to apply it.");
+  };
+  const promptStatusTone = promptStatus.startsWith("Unable") || promptStatus.startsWith("Prompt is too short") ? "error" : "success";
+  const rows: Array<[keyof typeof settings, string, string]> = [["conversationHistory", "Conversation history", "Retain query and answer history for 90 days"], ["emailNotifications", "Email notifications", "Notify teams about newly published documents"]];
+  return <><div className="setting-list">{rows.map(([key, title, description]) => <div key={key}><span><strong>{title}</strong><small>{description}</small></span><button className={`toggle ${settings[key] ? "on" : ""}`} onClick={() => toggle(key)}><i /></button></div>)}</div><div className="settings-form prompt-settings-form"><label className="span-2">System prompt<textarea value={systemPrompt} onChange={(event) => { setSystemPrompt(event.target.value); setPromptStatus(""); }} /></label><div className="span-2 form-actions"><button className="secondary" onClick={resetPrompt}>Reset default</button><button className="primary" onClick={() => void savePrompt()}>Save prompt</button></div>{promptStatus && <div className={`admin-action-message prompt-save-message span-2 ${promptStatusTone}`} role="status" aria-live="polite">{promptStatusTone === "success" ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}<span>{promptStatus}</span></div>}</div></>;
 }
 
-function AdminView({ currentUser }: { currentUser: AuthUser }) {
-  const [tab, setTab] = useState("Overview");
+function AdminView({ currentUser, initialTab = "Overview" }: { currentUser: AuthUser; initialTab?: string }) {
+  const router = useRouter();
+  const [tab, setTab] = useState(initialTab);
   const [exportOpen, setExportOpen] = useState(false);
   const exportCsv = async () => { const [telemetry, feedback, documents] = await Promise.all([fetch("/api/admin/telemetry").then((r) => r.json()), fetch("/api/feedback").then((r) => r.json()), fetch("/api/documents/list").then((r) => r.json())]); const rows = [["Section", "Value"], ["Query", "Latency (ms)", "Chunks", "Feedback"], ...(telemetry.rows || []).map((r: { query: string; latencyMs?: number; chunks: number; feedback?: string }) => [r.query, String(r.latencyMs || ""), String(r.chunks), r.feedback || ""]), ["Feedback records", String((feedback.feedback || []).length)], ["Documents", String((documents.files || []).length)]]; const csv = (rows as string[][]).map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n"); const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `beforest-admin-report-${new Date().toISOString().slice(0, 10)}.csv`; link.click(); URL.revokeObjectURL(url); setExportOpen(false); };
   return (
@@ -1610,7 +1752,10 @@ function AdminView({ currentUser }: { currentUser: AuthUser }) {
           <button
             key={t}
             className={tab === t ? "active" : ""}
-            onClick={() => setTab(t)}
+            onClick={() => {
+              setTab(t);
+              router.push(t === "Settings" ? "/settings" : "/admin");
+            }}
           >
             {t}
           </button>
@@ -1670,6 +1815,8 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }) {
 }
 
 export default function Home() {
+  const pathname = usePathname();
+  const router = useRouter();
   const [authLoading, setAuthLoading] = useState(true);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [view, setView] = useState<View>("ask");
@@ -1678,31 +1825,18 @@ export default function Home() {
   const [selectedChat, setSelectedChat] = useState<ConversationSummary | null>(null);
   const [activeConversationId, setActiveConversationId] = useState(createConversationId);
   const [recentChats, setRecentChats] = useState<ConversationSummary[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [allConversations, setAllConversations] = useState<ConversationSummary[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
-  const [projectModalOpen, setProjectModalOpen] = useState(false);
   const role = user?.role || "User";
   const refreshConversations = useCallback(() => {
-    if (!user || user.role === "Contributor") return;
+    if (!user) return;
     void fetch("/api/conversations")
       .then((response) => response.json())
       .then((data: { conversations?: ConversationSummary[] }) => {
         const conversations = data.conversations || [];
-        setAllConversations(conversations);
         setRecentChats(conversations.slice(0, 12));
       })
       .catch(() => {
-        setAllConversations([]);
         setRecentChats([]);
       });
-  }, [user]);
-  useEffect(() => {
-    if (!user || user.role === "Contributor") return;
-    void fetch("/api/projects")
-      .then((response) => response.json())
-      .then((data: { projects?: Project[] }) => setProjects(data.projects || []))
-      .catch(() => undefined);
   }, [user]);
   useEffect(() => {
     refreshConversations();
@@ -1712,22 +1846,17 @@ export default function Home() {
       .then((response) => response.json())
       .then((data: { user?: AuthUser | null }) => {
         setUser(data.user || null);
-        if (data.user) setView(defaultViewForRole(data.user.role));
+        if (data.user) setView(viewFromPath(pathname, data.user.role));
       })
       .catch(() => setUser(null))
       .finally(() => setAuthLoading(false));
-  }, []);
-  const projectChatCounts = useMemo(() => projects.reduce<Record<number, number>>((counts, project) => {
-    counts[project.id] = project.threadCount || 0;
-    return counts;
-  }, {}), [projects]);
-  const selectedProject = projects.find((project) => project.id === selectedProjectId) || null;
+  }, [pathname]);
   if (authLoading) return <main className="login-shell"><section className="login-card"><Brand /><p>Checking session…</p></section></main>;
-  if (!user) return <LoginView onLogin={(nextUser) => { setUser(nextUser); setView(defaultViewForRole(nextUser.role)); }} />;
-  const effectiveView = role === "Admin" && view === "admin" ? "admin" : role === "Contributor" ? "knowledge" : view === "admin" ? "ask" : view;
+  if (!user) return <LoginView onLogin={(nextUser) => { const nextView = viewFromPath(pathname, nextUser.role); setUser(nextUser); setView(nextView); router.push(pathForView(nextView)); }} />;
+  const effectiveView = role === "Admin" && view === "admin" ? "admin" : view === "admin" ? "ask" : view;
   const title = {
     knowledge: "Knowledge",
-    ask: selectedProject?.name || "Ask Beforest",
+    ask: "Ask Beforest",
     web: "Web search",
     admin: "Admin",
   }[effectiveView];
@@ -1735,19 +1864,14 @@ export default function Home() {
     <div className="app-shell">
       <Sidebar
         view={effectiveView}
-        setView={setView}
+        setView={(nextView) => { setView(nextView); router.push(pathForView(nextView)); }}
         role={role}
         mobileOpen={mobileOpen}
         closeMobile={() => setMobileOpen(false)}
-        onNewChat={() => { setSelectedChat(null); setActiveConversationId(createConversationId()); setChatKey((key) => key + 1); setView("ask"); }}
-        onSelectChat={(chat) => { setSelectedChat(chat); setSelectedProjectId(chat.projectId ?? null); setActiveConversationId(chat.id); setChatKey((key) => key + 1); setView("ask"); }}
+        onNewChat={() => { setSelectedChat(null); setActiveConversationId(createConversationId()); setChatKey((key) => key + 1); setView("ask"); router.push("/chat"); }}
+        onSelectChat={(chat) => { setSelectedChat(chat); setActiveConversationId(chat.id); setChatKey((key) => key + 1); setView("ask"); router.push("/chat"); }}
         selectedChatId={selectedChat?.id || ""}
         recentChats={recentChats}
-        projects={projects}
-        projectChatCounts={projectChatCounts}
-        selectedProjectId={selectedProjectId}
-        onAddProject={() => setProjectModalOpen(true)}
-        onSelectProject={(project) => { setSelectedProjectId(project.id); setSelectedChat(null); setActiveConversationId(createConversationId()); setChatKey((key) => key + 1); setView("ask"); }}
       />
       <div className="app-content">
         <Header
@@ -1757,39 +1881,19 @@ export default function Home() {
             void fetch("/api/auth/logout", { method: "POST" });
             setUser(null);
             setRecentChats([]);
-            setAllConversations([]);
-            setProjects([]);
             setSelectedChat(null);
-            setSelectedProjectId(null);
+            router.push("/login");
           }}
           openMobile={() => setMobileOpen(true)}
         />
-        {effectiveView === "knowledge" && <KnowledgeView project={selectedProject} />}
-        {effectiveView === "ask" && <AskView key={`${chatKey}-${activeConversationId}`} conversationId={activeConversationId} projectId={selectedProjectId} projectName={selectedProject?.name} initialQuestion={selectedChat?.title || undefined} fresh={!selectedChat} onChatStarted={(chatTitle) => {
-          const nextChat = { id: activeConversationId, title: chatTitle, projectId: selectedProjectId };
-          if (selectedProjectId && !allConversations.some((chat) => chat.id === activeConversationId)) {
-            setProjects((current) => current.map((project) => project.id === selectedProjectId ? { ...project, threadCount: (project.threadCount || 0) + 1 } : project));
-          }
-          setAllConversations((current) => [nextChat, ...current.filter((chat) => chat.id !== activeConversationId)]);
+        {effectiveView === "knowledge" && <KnowledgeView role={role} />}
+        {effectiveView === "ask" && <AskView key={`${chatKey}-${activeConversationId}`} conversationId={activeConversationId} initialQuestion={selectedChat?.title || undefined} fresh={!selectedChat} onChatStarted={(chatTitle) => {
+          const nextChat = { id: activeConversationId, title: chatTitle, projectId: null };
           setRecentChats((current) => [nextChat, ...current.filter((chat) => chat.id !== activeConversationId)].slice(0, 12));
         }} />}
         {effectiveView === "web" && <WebView />}
-        {effectiveView === "admin" && <AdminView currentUser={user} />}
+        {effectiveView === "admin" && <AdminView key={pathname.startsWith("/settings") ? "settings" : "admin"} currentUser={user} initialTab={pathname.startsWith("/settings") ? "Settings" : "Overview"} />}
       </div>
-      {projectModalOpen && (
-        <CreateProjectModal
-          close={() => setProjectModalOpen(false)}
-          onCreated={(project) => {
-            setProjects((current) => [...current, project]);
-            setSelectedProjectId(project.id);
-            setSelectedChat(null);
-            setActiveConversationId(createConversationId());
-            setChatKey((key) => key + 1);
-            setProjectModalOpen(false);
-            setView("ask");
-          }}
-        />
-      )}
     </div>
   );
 }

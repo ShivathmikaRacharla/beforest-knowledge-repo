@@ -1,9 +1,9 @@
-import { getQueryStats, saveQueryEvent, saveRetrievalResolution, saveRetrievalReview } from "@/lib/db";
+import { getQueryStats, getSettingValue, saveQueryEvent, saveRetrievalResolution, saveRetrievalReview } from "@/lib/db";
 import { requireActiveUser, requireRole } from "@/lib/auth";
 import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export function GET(request: Request) { const auth = requireRole(request, ["Admin"]); if ("response" in auth) return auth.response; return NextResponse.json(getQueryStats()); }
-export async function POST(request: Request) { const auth = requireActiveUser(request); if ("response" in auth) return auth.response; const body = await request.json(); saveQueryEvent(body); return NextResponse.json({ ok: true }); }
+export async function POST(request: Request) { const auth = requireActiveUser(request); if ("response" in auth) return auth.response; if (getSettingValue("conversationHistory", "true") === "false") return NextResponse.json({ ok: true, skipped: "conversation_history_disabled" }); const body = await request.json(); saveQueryEvent({ ...body, userName: auth.user.name }); return NextResponse.json({ ok: true }); }
 export async function PATCH(request: Request) {
   const auth = requireRole(request, ["Admin"]);
   if ("response" in auth) return auth.response;
