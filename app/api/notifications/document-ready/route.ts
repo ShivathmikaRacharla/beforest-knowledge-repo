@@ -17,18 +17,18 @@ type ReadyDocument = {
 };
 
 export async function POST(request: Request) {
-  const auth = requireRole(request, ["Admin"]);
+  const auth = await requireRole(request, ["Admin"]);
   if ("response" in auth) return auth.response;
   const body = (await request.json()) as ReadyDocument;
   const documentKey = body.documentKey?.trim();
   const documentName = body.documentName?.trim();
-  const team = body.teamId ? (notificationTeamExists(body.teamId) ? getNotificationTeam(body.teamId) : undefined) : body.collectionKey ? getNotificationTeamByCollectionKey(body.collectionKey.trim()) : undefined;
+  const team = body.teamId ? (await notificationTeamExists(body.teamId) ? await getNotificationTeam(body.teamId) : undefined) : body.collectionKey ? await getNotificationTeamByCollectionKey(body.collectionKey.trim()) : undefined;
   if (!documentKey || !documentName || !team) return NextResponse.json({ error: "documentKey, documentName and a valid team are required." }, { status: 400 });
-  if (getSettingValue("emailNotifications", "false") !== "true") return NextResponse.json({ skipped: true, reason: "Email notifications are disabled." });
+  if (await getSettingValue("emailNotifications", "false") !== "true") return NextResponse.json({ skipped: true, reason: "Email notifications are disabled." });
 
-  const teamDetails = body.collectionKey ? getNotificationTeamByCollectionKey(body.collectionKey.trim()) : undefined;
+  const teamDetails = body.collectionKey ? await getNotificationTeamByCollectionKey(body.collectionKey.trim()) : undefined;
   const teamName = teamDetails?.name || team.name;
-  const deliveries = prepareDocumentNotificationDeliveries({ documentKey, documentVersion: body.documentVersion || 1, teamId: team.id });
+  const deliveries = await prepareDocumentNotificationDeliveries({ documentKey, documentVersion: body.documentVersion || 1, teamId: team.id });
   let sent = 0;
   let skipped = 0;
   for (const delivery of deliveries) {
@@ -49,12 +49,12 @@ export async function POST(request: Request) {
         });
         return "sent" as const;
       } catch (error) {
-        markDocumentNotificationDelivery(delivery.deliveryId, "failed", error instanceof Error ? error.message : "Notification email failed.");
+        await markDocumentNotificationDelivery(delivery.deliveryId, "failed", error instanceof Error ? error.message : "Notification email failed.");
         return "failed" as const;
       }
     })();
     if (result === "sent") {
-      markDocumentNotificationDelivery(delivery.deliveryId, "sent");
+      await markDocumentNotificationDelivery(delivery.deliveryId, "sent");
       sent += 1;
     } else {
       skipped += 1;

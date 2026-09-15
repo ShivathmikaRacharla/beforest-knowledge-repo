@@ -11,7 +11,7 @@ function sessionCookie(request: Request) {
 }
 
 export async function POST(request: Request) {
-  logoutSession(sessionCookie(request));
+  await logoutSession(sessionCookie(request));
   const response = NextResponse.json({ ok: true });
   response.cookies.set(AUTH_COOKIE, "", { path: "/", maxAge: 0 });
   return response;

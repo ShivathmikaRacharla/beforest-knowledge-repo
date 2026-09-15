@@ -12,22 +12,21 @@ function cookieValue(request: Request, name: string) {
   return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
 }
 
-export function currentUser(request: Request) {
+export async function currentUser(request: Request) {
   return getUserBySessionToken(cookieValue(request, AUTH_COOKIE));
 }
 
-export function requireActiveUser(request: Request) {
-  const user = currentUser(request);
+export async function requireActiveUser(request: Request) {
+  const user = await currentUser(request);
   if (!user) return { response: NextResponse.json({ error: "Please log in." }, { status: 401 }) };
   return { user };
 }
 
-export function requireRole(request: Request, roles: AppRole[]) {
-  const result = requireActiveUser(request);
+export async function requireRole(request: Request, roles: AppRole[]) {
+  const result = await requireActiveUser(request);
   if ("response" in result) return result;
   if (!roles.includes(result.user.role)) {
     return { response: NextResponse.json({ error: "You do not have permission for this action." }, { status: 403 }) };
   }
   return result;
 }
-

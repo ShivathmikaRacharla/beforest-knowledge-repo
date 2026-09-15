@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
-    const auth = requireActiveUser(request);
+    const auth = await requireActiveUser(request);
     if ("response" in auth) return auth.response;
 
     const body = await request.json() as { dropboxPath?: string; fileName?: string };

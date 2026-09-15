@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 
 export async function DELETE(request: Request) {
   try {
-    const auth = requireRole(request, ["Admin"]);
+    const auth = await requireRole(request, ["Admin"]);
     if ("response" in auth) return auth.response;
     const body = (await request.json()) as {
       dropboxPath?: string;

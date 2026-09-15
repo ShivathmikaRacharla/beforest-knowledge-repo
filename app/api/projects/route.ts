@@ -4,14 +4,14 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-export function GET(request: Request) {
-  const auth = requireRole(request, ["Admin", "User"]);
+export async function GET(request: Request) {
+  const auth = await requireRole(request, ["Admin", "User"]);
   if ("response" in auth) return auth.response;
-  return NextResponse.json({ projects: listProjects() });
+  return NextResponse.json({ projects: await listProjects() });
 }
 
 export async function POST(request: Request) {
-  const auth = requireRole(request, ["Admin", "User"]);
+  const auth = await requireRole(request, ["Admin", "User"]);
   if ("response" in auth) return auth.response;
   const body = (await request.json()) as { name?: string; description?: string };
   const name = body.name?.trim();
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    return NextResponse.json({ project: createProject({ name, description, createdBy: auth.user.name }) }, { status: 201 });
+    return NextResponse.json({ project: await createProject({ name, description, createdBy: auth.user.name }) }, { status: 201 });
   } catch (error) {
     if (error instanceof Error && error.message.includes("UNIQUE")) {
       return NextResponse.json({ error: "A project with this name already exists." }, { status: 409 });

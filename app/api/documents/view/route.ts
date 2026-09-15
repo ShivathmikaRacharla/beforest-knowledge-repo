@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   try {
-    const auth = requireActiveUser(request);
+    const auth = await requireActiveUser(request);
     if ("response" in auth) return auth.response;
 
     const url = new URL(request.url);

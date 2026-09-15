@@ -189,7 +189,7 @@ function fallbackAnswerFromRetrieval(retrieval: Awaited<ReturnType<typeof retrie
 
 export async function POST(request: Request) {
   try {
-    const auth = requireRole(request, ["Admin", "User"]);
+    const auth = await requireRole(request, ["Admin", "User"]);
     if ("response" in auth) return auth.response;
     const body = (await request.json()) as {
       message?: string;
@@ -228,7 +228,7 @@ export async function POST(request: Request) {
     }
 
     const startedAt = Date.now();
-    const systemPrompt = getSettingValue("knowledge.systemPrompt", DEFAULT_KNOWLEDGE_SYSTEM_PROMPT);
+    const systemPrompt = await getSettingValue("knowledge.systemPrompt", DEFAULT_KNOWLEDGE_SYSTEM_PROMPT);
     const retrieval = await retrieveKnowledge(message, { limit: 5 });
     let answer: KmsAnswer | null = isApprovedDocumentCountQuestion(message)
       ? {
@@ -254,9 +254,9 @@ export async function POST(request: Request) {
       .map((match) => match.score)
       .filter((score): score is number => typeof score === "number");
 
-    const conversationHistoryEnabled = getSettingValue("conversationHistory", "true") !== "false";
+    const conversationHistoryEnabled = (await getSettingValue("conversationHistory", "true")) !== "false";
     if (body.sessionId && conversationHistoryEnabled) {
-      saveQueryEvent({
+      await saveQueryEvent({
         sessionId: body.sessionId,
         userName: auth.user.name,
         query: message,

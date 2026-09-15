@@ -7,12 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "migrate:postgres": "node scripts/migrate-postgres.mjs",
     "sync:vector-metadata": "node scripts/sync-vector-store-metadata.mjs"
   },
   "dependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/pg": "^8.20.0",
-    "better-sqlite3": "^12.11.1",
     "dotenv": "^17.4.2",
     "lucide-react": "1.24.0",
     "next": "16.2.10",

@@ -3,8 +3,8 @@ import { requireRole } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
-export function GET(request: Request) {
-  const auth = requireRole(request, ["Admin"]);
+export async function GET(request: Request) {
+  const auth = await requireRole(request, ["Admin"]);
   if ("response" in auth) return auth.response;
 
   return NextResponse.json(
@@ -17,7 +17,7 @@ export function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const auth = requireRole(request, ["Admin"]);
+  const auth = await requireRole(request, ["Admin"]);
   if ("response" in auth) return auth.response;
 
   return NextResponse.json(

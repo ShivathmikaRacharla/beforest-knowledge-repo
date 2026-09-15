@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-export function GET(request: Request) {
-  ensureDefaultAdmin();
-  return NextResponse.json({ user: currentUser(request) });
+export async function GET(request: Request) {
+  await ensureDefaultAdmin();
+  return NextResponse.json({ user: await currentUser(request) });
 }

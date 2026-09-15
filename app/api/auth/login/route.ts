@@ -12,7 +12,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Email and password are required." }, { status: 400 });
   }
 
-  const result = loginUser(email, password);
+  const result = await loginUser(email, password);
   if ("error" in result) return NextResponse.json({ error: result.error }, { status: 401 });
 
   const response = NextResponse.json({ user: result.user });

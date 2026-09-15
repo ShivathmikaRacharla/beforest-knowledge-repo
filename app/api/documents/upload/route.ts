@@ -4,7 +4,7 @@ import { requireActiveUser } from "@/lib/auth";
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  const auth = requireActiveUser(request);
+  const auth = await requireActiveUser(request);
   if ("response" in auth) return auth.response;
 
   return NextResponse.json(
