@@ -32,20 +32,10 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useAuth, type AuthUser, type Role } from "./auth-provider";
 import { DEFAULT_KNOWLEDGE_SYSTEM_PROMPT } from "@/lib/prompts";
 
-type Role = "Admin" | "User";
 type View = "knowledge" | "ask" | "web" | "admin";
-type AuthUser = {
-  id: number;
-  name: string;
-  email: string;
-  role: Role;
-  teamId?: number | null;
-  active: boolean;
-  lastActiveAt?: string | null;
-  createdAt: string;
-};
 type ConversationSummary = {
   id: string;
   title: string;
@@ -1815,9 +1805,7 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }) {
 export default function Home() {
   const pathname = usePathname();
   const router = useRouter();
-  const [authLoading, setAuthLoading] = useState(true);
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [view, setView] = useState<View>("ask");
+  const { user, authLoading, setUser } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [chatKey, setChatKey] = useState(0);
   const [selectedChat, setSelectedChat] = useState<ConversationSummary | null>(null);
@@ -1839,19 +1827,9 @@ export default function Home() {
   useEffect(() => {
     refreshConversations();
   }, [refreshConversations]);
-  useEffect(() => {
-    void fetch("/api/auth/me")
-      .then((response) => response.json())
-      .then((data: { user?: AuthUser | null }) => {
-        setUser(data.user || null);
-        if (data.user && typeof window !== "undefined") setView(viewFromPath(window.location.pathname, data.user.role));
-      })
-      .catch(() => setUser(null))
-      .finally(() => setAuthLoading(false));
-  }, []);
   if (authLoading) return <main className="login-shell"><section className="login-card"><Brand /><p>Checking session…</p></section></main>;
-  if (!user) return <LoginView onLogin={(nextUser) => { const nextView = viewFromPath(pathname, nextUser.role); setUser(nextUser); setView(nextView); router.push(pathForView(nextView)); }} />;
-  const effectiveView = role === "Admin" && view === "admin" ? "admin" : view === "admin" ? "ask" : view;
+  if (!user) return <LoginView onLogin={(nextUser) => { setUser(nextUser); router.push(pathForView(viewFromPath(pathname, nextUser.role))); }} />;
+  const effectiveView = viewFromPath(pathname, role);
   const title = {
     knowledge: "Knowledge",
     ask: "Ask Beforest",
@@ -1862,12 +1840,12 @@ export default function Home() {
     <div className="app-shell">
       <Sidebar
         view={effectiveView}
-        setView={(nextView) => { setView(nextView); router.push(pathForView(nextView)); }}
+        setView={(nextView) => router.push(pathForView(nextView))}
         role={role}
         mobileOpen={mobileOpen}
         closeMobile={() => setMobileOpen(false)}
-        onNewChat={() => { setSelectedChat(null); setActiveConversationId(createConversationId()); setChatKey((key) => key + 1); setView("ask"); router.push("/chat"); }}
-        onSelectChat={(chat) => { setSelectedChat(chat); setActiveConversationId(chat.id); setChatKey((key) => key + 1); setView("ask"); router.push("/chat"); }}
+        onNewChat={() => { setSelectedChat(null); setActiveConversationId(createConversationId()); setChatKey((key) => key + 1); router.push("/chat"); }}
+        onSelectChat={(chat) => { setSelectedChat(chat); setActiveConversationId(chat.id); setChatKey((key) => key + 1); router.push("/chat"); }}
         selectedChatId={selectedChat?.id || activeConversationId}
         recentChats={recentChats}
       />
