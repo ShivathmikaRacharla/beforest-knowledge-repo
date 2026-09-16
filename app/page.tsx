@@ -1730,7 +1730,6 @@ function SystemSettings() {
 }
 
 function AdminView({ currentUser, initialTab = "Overview" }: { currentUser: AuthUser; initialTab?: string }) {
-  const router = useRouter();
   const [tab, setTab] = useState(initialTab);
   const [exportOpen, setExportOpen] = useState(false);
   const exportCsv = async () => { const [telemetry, feedback, documents] = await Promise.all([fetch("/api/admin/telemetry").then((r) => r.json()), fetch("/api/feedback").then((r) => r.json()), fetch("/api/documents/list").then((r) => r.json())]); const rows = [["Section", "Value"], ["Query", "Latency (ms)", "Chunks", "Feedback"], ...(telemetry.rows || []).map((r: { query: string; latencyMs?: number; chunks: number; feedback?: string }) => [r.query, String(r.latencyMs || ""), String(r.chunks), r.feedback || ""]), ["Feedback records", String((feedback.feedback || []).length)], ["Documents", String((documents.files || []).length)]]; const csv = (rows as string[][]).map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n"); const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `beforest-admin-report-${new Date().toISOString().slice(0, 10)}.csv`; link.click(); URL.revokeObjectURL(url); setExportOpen(false); };
@@ -1754,7 +1753,6 @@ function AdminView({ currentUser, initialTab = "Overview" }: { currentUser: Auth
             className={tab === t ? "active" : ""}
             onClick={() => {
               setTab(t);
-              router.push(t === "Settings" ? "/settings" : "/admin");
             }}
           >
             {t}
@@ -1846,11 +1844,11 @@ export default function Home() {
       .then((response) => response.json())
       .then((data: { user?: AuthUser | null }) => {
         setUser(data.user || null);
-        if (data.user) setView(viewFromPath(pathname, data.user.role));
+        if (data.user && typeof window !== "undefined") setView(viewFromPath(window.location.pathname, data.user.role));
       })
       .catch(() => setUser(null))
       .finally(() => setAuthLoading(false));
-  }, [pathname]);
+  }, []);
   if (authLoading) return <main className="login-shell"><section className="login-card"><Brand /><p>Checking session…</p></section></main>;
   if (!user) return <LoginView onLogin={(nextUser) => { const nextView = viewFromPath(pathname, nextUser.role); setUser(nextUser); setView(nextView); router.push(pathForView(nextView)); }} />;
   const effectiveView = role === "Admin" && view === "admin" ? "admin" : view === "admin" ? "ask" : view;
@@ -1870,7 +1868,7 @@ export default function Home() {
         closeMobile={() => setMobileOpen(false)}
         onNewChat={() => { setSelectedChat(null); setActiveConversationId(createConversationId()); setChatKey((key) => key + 1); setView("ask"); router.push("/chat"); }}
         onSelectChat={(chat) => { setSelectedChat(chat); setActiveConversationId(chat.id); setChatKey((key) => key + 1); setView("ask"); router.push("/chat"); }}
-        selectedChatId={selectedChat?.id || ""}
+        selectedChatId={selectedChat?.id || activeConversationId}
         recentChats={recentChats}
       />
       <div className="app-content">

@@ -1313,6 +1313,9 @@ button {
   overflow: hidden;
   background: #fff;
 }
+.admin-section.wide {
+  grid-column: 1 / -1;
+}
 .admin-section.full {
   min-height: 480px;
 }
