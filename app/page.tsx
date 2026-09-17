@@ -47,7 +47,7 @@ function createConversationId() {
 }
 
 function evidenceBand(score?: number | null) {
-  if (typeof score !== "number") return "No evidence";
+  if (typeof score !== "number") return "Unscored citation";
   if (score >= 0.6) return "High";
   if (score >= 0.35) return "Medium";
   return "Low";
@@ -1796,7 +1796,6 @@ function LoginView({ onLogin }: { onLogin: (user: AuthUser) => void }) {
           {error && <p className="login-error">{error}</p>}
           <button className="primary" type="submit" disabled={loading}>{loading ? "Signing in…" : "Sign in"}</button>
         </form>
-        <small>If this is your first setup, use the default admin credentials configured in your environment variables.</small>
       </section>
     </main>
   );

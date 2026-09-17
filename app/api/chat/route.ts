@@ -52,6 +52,11 @@ function selectRelevantCitations(
   const matched = citations.filter((citation) => {
     const key = sourceKey(citation.dropbox_path || citation.file_name);
     return !retrievalScores.size || retrievalScores.has(key);
+  }).map((citation) => {
+    if (typeof citation.score === "number") return citation;
+    const key = sourceKey(citation.dropbox_path || citation.file_name);
+    const score = retrievalScores.get(key);
+    return typeof score === "number" ? { ...citation, score } : citation;
   });
   if (matched.length <= 1) return matched;
 
