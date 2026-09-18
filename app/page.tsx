@@ -671,6 +671,14 @@ type ChatCitation = {
   url?: string;
 };
 
+type FeedbackReason = "slow_response" | "wrong_citation" | "poor_retrieval";
+
+const feedbackReasons: Array<{ value: FeedbackReason; label: string }> = [
+  { value: "slow_response", label: "Slow response" },
+  { value: "wrong_citation", label: "Wrong citation" },
+  { value: "poor_retrieval", label: "Poor retrieval" },
+];
+
 function uniqueCitations(citations: ChatCitation[]) {
   const seen = new Set<string>();
   return citations.filter((citation, index) => {
@@ -719,6 +727,7 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
   const [feedbackRating, setFeedbackRating] = useState<"up" | "down" | "neutral">("neutral");
+  const [feedbackReason, setFeedbackReason] = useState<FeedbackReason | "">("");
   const [feedbackNote, setFeedbackNote] = useState("");
   const [feedbackNotice, setFeedbackNotice] = useState("");
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
@@ -863,11 +872,11 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
   const evidenceScore = evidenceScores.length ? Math.max(...evidenceScores) : null;
   const evidenceLevel = loading ? "Assessing evidence…" : evidenceBand(evidenceScore);
   const evidenceTone = loading ? "assessing" : evidenceLevel.toLowerCase().replace(" ", "-");
-  const sendFeedback = async (rating: "up" | "down" | "neutral", note = "") => {
+  const sendFeedback = async (rating: "up" | "down" | "neutral", reason: FeedbackReason, note = "") => {
     const response = await fetch("/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, rating, note }),
+      body: JSON.stringify({ sessionId, rating, reason, note }),
     });
     if (!response.ok) throw new Error("Unable to save feedback.");
     setFeedback(rating === "neutral" ? null : rating);
@@ -877,13 +886,15 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
   };
   const openFeedbackModal = (rating: "up" | "down" | "neutral" = feedback || "neutral") => {
     setFeedbackRating(rating);
+    setFeedbackReason("");
     setFeedbackNote("");
     setFeedbackNotice("");
     setFeedbackModalOpen(true);
   };
   const submitFeedbackNote = async () => {
     try {
-      await sendFeedback(feedbackRating, feedbackNote);
+      if (!feedbackReason) { setFeedbackNotice("Select a reason before submitting feedback."); return; }
+      await sendFeedback(feedbackRating, feedbackReason, feedbackNote);
       setFeedbackModalOpen(false);
     } catch (feedbackError) {
       setFeedbackNotice(feedbackError instanceof Error ? feedbackError.message : "Unable to save feedback.");
@@ -978,7 +989,7 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
                     <span>Was this helpful?</span>
                     <button
                       className={feedback === "up" ? "chosen" : ""}
-                      onClick={() => { void sendFeedback("up").catch((feedbackError) => setFeedbackNotice(feedbackError instanceof Error ? feedbackError.message : "Unable to save feedback.")); }}
+                      onClick={() => openFeedbackModal("up")}
                     >
                       <ThumbsUp size={18} />
                     </button>
@@ -1090,6 +1101,13 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
                 <option value="up">Positive</option>
                 <option value="down">Negative</option>
                 <option value="neutral">Neutral / general feedback</option>
+              </select>
+            </label>
+            <label>
+              Feedback reason
+              <select value={feedbackReason} onChange={(event) => setFeedbackReason(event.target.value as FeedbackReason)}>
+                <option value="">Select a reason</option>
+                {feedbackReasons.map((reason) => <option key={reason.value} value={reason.value}>{reason.label}</option>)}
               </select>
             </label>
             <label>
@@ -1504,7 +1522,7 @@ function AdminDocuments() {
 }
 
 function AdminFeedback() {
-  const [items, setItems] = useState<Array<{ id: number; rating: "up" | "down" | "neutral"; note?: string | null; query?: string; userName?: string; createdAt: string; status?: "open" | "resolved"; resolutionNote?: string | null; notificationSent?: boolean }>>([]);
+  const [items, setItems] = useState<Array<{ id: number; rating: "up" | "down" | "neutral"; reason?: FeedbackReason | null; note?: string | null; query?: string; userName?: string; createdAt: string; status?: "open" | "resolved"; resolutionNote?: string | null; notificationSent?: boolean }>>([]);
   const [reviewId, setReviewId] = useState<number | null>(null);
   const [resolutionNotes, setResolutionNotes] = useState<Record<number, string>>({});
   const [resolvingId, setResolvingId] = useState<number | null>(null);
@@ -1531,13 +1549,17 @@ function AdminFeedback() {
   };
   if (!items.length) return <div className="empty-admin-panel">No feedback has been submitted yet.</div>;
   const label = (rating: "up" | "down" | "neutral") => rating === "up" ? "Positive" : rating === "down" ? "Negative" : "Neutral";
+  const reasonLabel = (reason?: FeedbackReason | null) => feedbackReasons.find((option) => option.value === reason)?.label || "Uncategorized";
   const sortedItems = [...items].sort((a, b) => {
     const priority = { down: 0, neutral: 1, up: 2 };
     return priority[a.rating] - priority[b.rating] || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
+  const groupedItems = Object.entries(sortedItems.reduce<Record<string, typeof sortedItems>>((groups, item) => { const key = item.reason || "uncategorized"; (groups[key] ||= []).push(item); return groups; }, {})).sort(([, left], [, right]) => right.length - left.length);
   return (
     <div className="admin-feedback-list redesigned">
-      {sortedItems.map((item) => (
+      {groupedItems.map(([reason, group]) => <section className="feedback-reason-group" key={reason}>
+        <h3>{reasonLabel(reason === "uncategorized" ? null : reason as FeedbackReason)} <small>{group.length}</small></h3>
+        {group.map((item) => (
         <div className={`admin-feedback-item feedback-${item.rating}`} key={item.id}>
           <div className="admin-feedback-row redesigned">
             <span className={`feedback-badge ${item.rating}`}>{label(item.rating)}</span>
@@ -1565,7 +1587,8 @@ function AdminFeedback() {
             </div>
           )}
         </div>
-      ))}
+        ))}
+      </section>)}
       {actionMessage && <p className="admin-action-message">{actionMessage}</p>}
     </div>
   );

@@ -8,9 +8,10 @@ export async function GET(request: Request) { const auth = await requireRole(req
 export async function POST(request: Request) {
   const auth = await requireActiveUser(request);
   if ("response" in auth) return auth.response;
-  const body = (await request.json()) as { sessionId?: string; rating?: "up" | "down" | "neutral"; note?: string };
-  if (!body.sessionId || !body.rating || !["up", "down", "neutral"].includes(body.rating)) return NextResponse.json({ error: "sessionId and rating are required" }, { status: 400 });
-  await saveFeedback(body.sessionId, body.rating, body.note);
+  const body = (await request.json()) as { sessionId?: string; rating?: "up" | "down" | "neutral"; reason?: "slow_response" | "wrong_citation" | "poor_retrieval"; note?: string };
+  const reasons = ["slow_response", "wrong_citation", "poor_retrieval"] as const;
+  if (!body.sessionId || !body.rating || !["up", "down", "neutral"].includes(body.rating) || !body.reason || !reasons.includes(body.reason)) return NextResponse.json({ error: "sessionId, rating, and a valid reason are required" }, { status: 400 });
+  await saveFeedback(body.sessionId, body.rating, body.reason, body.note);
   return NextResponse.json({ ok: true });
 }
 export async function PATCH(request: Request) {
