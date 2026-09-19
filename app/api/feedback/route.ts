@@ -8,8 +8,9 @@ export async function GET(request: Request) { const auth = await requireRole(req
 export async function POST(request: Request) {
   const auth = await requireActiveUser(request);
   if ("response" in auth) return auth.response;
-  const body = (await request.json()) as { sessionId?: string; rating?: "up" | "down" | "neutral"; reason?: "slow_response" | "wrong_citation" | "poor_retrieval"; note?: string };
-  const reasons = ["slow_response", "wrong_citation", "poor_retrieval"] as const;
+  const body = (await request.json()) as { sessionId?: string; rating?: "up" | "down" | "neutral"; reason?: "slow_response" | "wrong_citation" | "poor_retrieval" | "not_relevant" | "missing_incomplete_information" | "accurate_helpful" | "clear_easy_to_understand" | "relevant_complete" | "other"; note?: string };
+  const reasons = ["slow_response", "wrong_citation", "poor_retrieval", "not_relevant", "missing_incomplete_information", "accurate_helpful", "clear_easy_to_understand", "relevant_complete", "other"] as const;
+  if (body.reason === "other" && !body.note?.trim()) return NextResponse.json({ error: "A note is required when the reason is Other" }, { status: 400 });
   if (!body.sessionId || !body.rating || !["up", "down", "neutral"].includes(body.rating) || !body.reason || !reasons.includes(body.reason)) return NextResponse.json({ error: "sessionId, rating, and a valid reason are required" }, { status: 400 });
   await saveFeedback(body.sessionId, body.rating, body.reason, body.note);
   return NextResponse.json({ ok: true });

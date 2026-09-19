@@ -671,12 +671,18 @@ type ChatCitation = {
   url?: string;
 };
 
-type FeedbackReason = "slow_response" | "wrong_citation" | "poor_retrieval";
+type FeedbackReason = "slow_response" | "wrong_citation" | "poor_retrieval" | "not_relevant" | "missing_incomplete_information" | "accurate_helpful" | "clear_easy_to_understand" | "relevant_complete" | "other";
 
 const feedbackReasons: Array<{ value: FeedbackReason; label: string }> = [
   { value: "slow_response", label: "Slow response" },
   { value: "wrong_citation", label: "Wrong citation" },
   { value: "poor_retrieval", label: "Poor retrieval" },
+  { value: "not_relevant", label: "Not relevant" },
+  { value: "missing_incomplete_information", label: "Missing / Incomplete Information" },
+  { value: "accurate_helpful", label: "Accurate & Helpful" },
+  { value: "clear_easy_to_understand", label: "Clear & Easy to Understand" },
+  { value: "relevant_complete", label: "Relevant & Complete" },
+  { value: "other", label: "Other" },
 ];
 
 function uniqueCitations(citations: ChatCitation[]) {
@@ -894,6 +900,7 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
   const submitFeedbackNote = async () => {
     try {
       if (!feedbackReason) { setFeedbackNotice("Select a reason before submitting feedback."); return; }
+      if (feedbackReason === "other" && !feedbackNote.trim()) { setFeedbackNotice("Add a note when selecting Other."); return; }
       await sendFeedback(feedbackRating, feedbackReason, feedbackNote);
       setFeedbackModalOpen(false);
     } catch (feedbackError) {
@@ -1100,7 +1107,6 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
               <select value={feedbackRating} onChange={(event) => setFeedbackRating(event.target.value as "up" | "down" | "neutral")}>
                 <option value="up">Positive</option>
                 <option value="down">Negative</option>
-                <option value="neutral">Neutral / general feedback</option>
               </select>
             </label>
             <label>
