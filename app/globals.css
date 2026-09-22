@@ -1595,7 +1595,19 @@ button {
     grid-template-columns: 1fr;
   }
   .folder-panel {
-    display: none;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 8px;
+  }
+  .folder-panel .panel-label,
+  .folder-panel .folder-row {
+    flex: 0 0 auto;
+  }
+  .folder-panel .folder-row {
+    min-width: max-content;
   }
   .document-tools {
     padding: 10px;
@@ -1726,9 +1738,19 @@ button {
   .profile-wrap {
     position: static;
   }
+  .notification-panel {
+    position: fixed;
+    top: 64px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    max-width: none;
+  }
   .role-menu {
-    right: 10px;
-    top: 58px;
+    position: fixed;
+    top: 64px;
+    right: 12px;
+    width: min(190px, calc(100vw - 24px));
   }
 }
 @media (max-width: 760px) {
