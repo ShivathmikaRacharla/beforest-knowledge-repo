@@ -433,6 +433,19 @@ button {
   border-right: 1px solid var(--line);
   padding: 14px 10px;
 }
+.collections-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  width: 100%;
+  text-align: left;
+}
+.collections-toggle svg {
+  display: none;
+}
+.collection-options {
+  display: contents;
+}
 .panel-label {
   height: 38px;
   padding: 0 9px;
@@ -1595,19 +1608,30 @@ button {
     grid-template-columns: 1fr;
   }
   .folder-panel {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
+    display: block;
     border-right: 0;
     border-bottom: 1px solid var(--line);
     padding: 8px;
   }
-  .folder-panel .panel-label,
-  .folder-panel .folder-row {
-    flex: 0 0 auto;
+  .collections-toggle {
+    display: flex;
+    height: 38px;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+  }
+  .collections-toggle svg {
+    display: block;
+  }
+  .collection-options {
+    display: none;
+    gap: 4px;
+  }
+  .folder-panel.open .collection-options {
+    display: grid;
   }
   .folder-panel .folder-row {
-    min-width: max-content;
+    min-width: 0;
   }
   .document-tools {
     padding: 10px;

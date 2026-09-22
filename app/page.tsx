@@ -288,6 +288,8 @@ function Header({
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, []);
 
+  const showHeaderTitle = title !== "Admin" && title !== "Knowledge";
+
   return (
     <header className="header">
       <div className="header-title">
@@ -298,7 +300,7 @@ function Header({
         >
           <Menu size={20} />
         </button>
-        <h1>{title}</h1>
+        {showHeaderTitle && <h1>{title}</h1>}
       </div>
       <div className="header-actions">
         <div className="notification-wrap" ref={notificationRef}>
@@ -358,6 +360,7 @@ function Header({
 function KnowledgeView({ role }: { role: Role }) {
   const [filter, setFilter] = useState("");
   const [selectedCollection, setSelectedCollection] = useState("all");
+  const [collectionsOpen, setCollectionsOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedType, setSelectedType] = useState("all");
   const [selectedOwner, setSelectedOwner] = useState("all");
@@ -500,19 +503,32 @@ function KnowledgeView({ role }: { role: Role }) {
         </div>
       </div>
       <div className="knowledge-layout">
-        <aside className="folder-panel">
-          <div className="panel-label">Collections</div>
-          {collections.map(({ id, label, count, icon: Icon }) => (
-            <button
-              className={`folder-row ${selectedCollection === id ? "selected" : ""}`}
-              key={id}
-              onClick={() => setSelectedCollection(id)}
-            >
-              <Icon size={18} />
-              <span>{label}</span>
-              <small>{count}</small>
-            </button>
-          ))}
+        <aside className={`folder-panel ${collectionsOpen ? "open" : ""}`}>
+          <button
+            className="panel-label collections-toggle"
+            type="button"
+            aria-expanded={collectionsOpen}
+            onClick={() => setCollectionsOpen((open) => !open)}
+          >
+            <span>Collections</span>
+            <ChevronDown className={collectionsOpen ? "rotated" : ""} size={16} />
+          </button>
+          <div className="collection-options">
+            {collections.map(({ id, label, count, icon: Icon }) => (
+              <button
+                className={`folder-row ${selectedCollection === id ? "selected" : ""}`}
+                key={id}
+                onClick={() => {
+                  setSelectedCollection(id);
+                  setCollectionsOpen(false);
+                }}
+              >
+                <Icon size={18} />
+                <span>{label}</span>
+                <small>{count}</small>
+              </button>
+            ))}
+          </div>
         </aside>
         <section className="document-panel">
           <div className="document-tools">
