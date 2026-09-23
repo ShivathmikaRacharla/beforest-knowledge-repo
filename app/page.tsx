@@ -692,14 +692,24 @@ type FeedbackReason = "slow_response" | "wrong_citation" | "poor_retrieval" | "n
 const feedbackReasons: Array<{ value: FeedbackReason; label: string }> = [
   { value: "slow_response", label: "Slow response" },
   { value: "wrong_citation", label: "Wrong citation" },
-  { value: "poor_retrieval", label: "Poor retrieval" },
-  { value: "not_relevant", label: "Not relevant" },
-  { value: "missing_incomplete_information", label: "Missing / Incomplete Information" },
+  { value: "missing_incomplete_information", label: "Missing information" },
   { value: "accurate_helpful", label: "Accurate & Helpful" },
   { value: "clear_easy_to_understand", label: "Clear & Easy to Understand" },
   { value: "relevant_complete", label: "Relevant & Complete" },
   { value: "other", label: "Other" },
 ];
+
+const feedbackReasonLabels: Record<FeedbackReason, string> = {
+  slow_response: "Slow response",
+  wrong_citation: "Wrong citation",
+  poor_retrieval: "Poor retrieval",
+  not_relevant: "Not relevant",
+  missing_incomplete_information: "Missing information",
+  accurate_helpful: "Accurate & Helpful",
+  clear_easy_to_understand: "Clear & Easy to Understand",
+  relevant_complete: "Relevant & Complete",
+  other: "Other",
+};
 
 function uniqueCitations(citations: ChatCitation[]) {
   const seen = new Set<string>();
@@ -1579,7 +1589,7 @@ function AdminFeedback() {
   };
   if (!items.length) return <div className="empty-admin-panel">No feedback has been submitted yet.</div>;
   const label = (rating: "up" | "down" | "neutral") => rating === "up" ? "Positive" : rating === "down" ? "Negative" : "Neutral";
-  const reasonLabel = (reason?: FeedbackReason | null) => feedbackReasons.find((option) => option.value === reason)?.label || "Uncategorized";
+  const reasonLabel = (reason?: FeedbackReason | null) => reason ? feedbackReasonLabels[reason] || "Uncategorized" : "Uncategorized";
   const sortedItems = [...items].sort((a, b) => {
     const priority = { down: 0, neutral: 1, up: 2 };
     return priority[a.rating] - priority[b.rating] || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
