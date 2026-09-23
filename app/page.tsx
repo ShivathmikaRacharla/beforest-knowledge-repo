@@ -756,7 +756,15 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
   const [submittedFeedbackRating, setSubmittedFeedbackRating] = useState<"up" | "down" | "neutral" | null>(null);
   const [details, setDetails] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [appearanceThumbnail, setAppearanceThumbnail] = useState("");
   const sessionId = conversationId;
+
+  useEffect(() => {
+    void fetch("/api/appearance")
+      .then((response) => response.json())
+      .then((data) => setAppearanceThumbnail(typeof data.appearance?.thumbnail === "string" ? data.appearance.thumbnail : ""))
+      .catch(() => setAppearanceThumbnail(""));
+  }, []);
 
   useEffect(() => {
     if (fresh) return;
@@ -930,7 +938,7 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
         <div className="ask-inner">
           <div className="ask-box">
             <div className="ask-input">
-              <Leaf size={21} />
+              {appearanceThumbnail ? <span className="ask-logo" style={{ backgroundImage: `url(${appearanceThumbnail})` }} aria-hidden="true" /> : <Leaf size={21} />}
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}

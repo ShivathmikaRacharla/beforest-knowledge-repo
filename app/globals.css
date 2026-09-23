@@ -839,6 +839,14 @@ button {
 .ask-input > svg {
   color: var(--green);
 }
+.ask-logo {
+  width: 21px;
+  height: 21px;
+  flex: 0 0 21px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
 .ask-input input {
   border: 0;
   outline: 0;
