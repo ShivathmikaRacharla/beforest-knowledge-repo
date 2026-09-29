@@ -86,6 +86,26 @@ async function downloadDropboxDocument(accessToken: string, dropboxPath: string)
   };
 }
 
+async function previewDropboxDocument(accessToken: string, dropboxPath: string) {
+  const response = await fetch("https://content.dropboxapi.com/2/files/get_preview", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Dropbox-API-Arg": JSON.stringify({ path: dropboxPath }),
+    },
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Dropbox document preview failed (${response.status})${detail ? `: ${detail.slice(0, 300)}` : ""}.`);
+  }
+
+  return {
+    bytes: Buffer.from(await response.arrayBuffer()),
+    contentType: response.headers.get("content-type") || "application/octet-stream",
+  };
+}
+
 function mimeTypeForFileName(fileName?: string) {
   const extension = fileName?.split(".").pop()?.toLowerCase();
   if (extension === "pdf") return "application/pdf";
@@ -116,6 +136,18 @@ export async function getDropboxDocumentFile(dropboxPath: string, fileName?: str
       bytes: file.bytes,
       contentType: file.contentType === "application/octet-stream" ? mimeTypeForFileName(fileName) : file.contentType,
     };
+  }
+}
+
+export async function getDropboxPreviewFile(dropboxPath: string, fileName?: string) {
+  const accessToken = await getDropboxAccessToken();
+  try {
+    return await previewDropboxDocument(accessToken, dropboxPath);
+  } catch (error) {
+    if (!fileName) throw error;
+    const fallbackPath = await findDropboxDocumentPath(accessToken, fileName);
+    if (!fallbackPath) throw error;
+    return previewDropboxDocument(accessToken, fallbackPath);
   }
 }
 

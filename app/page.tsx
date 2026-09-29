@@ -458,32 +458,14 @@ function KnowledgeView({ role }: { role: Role }) {
   const openDocument = async (document: KnowledgeDocument) => {
     if (!document.dropboxPath || openingDocument) return;
     setOpeningDocument(document.id);
-    const previewTab = document.type === "PDF" ? null : window.open("about:blank", "_blank");
     try {
-      let targetUrl: string;
-      if (document.type === "PDF") {
-        const params = new URLSearchParams({
-          path: document.dropboxPath,
-          name: document.name,
-        });
-        targetUrl = `/api/documents/view?${params.toString()}`;
-      } else {
-        const response = await fetch("/api/documents/open", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dropboxPath: document.dropboxPath, fileName: document.name }),
-        });
-        const data = (await response.json().catch(() => ({}))) as { url?: string; error?: string };
-        if (!response.ok || !data.url) throw new Error(data.error || "Unable to open document preview.");
-        targetUrl = data.url;
-      }
-      if (previewTab) {
-        previewTab.location.href = targetUrl;
-      } else {
-        window.open(targetUrl, "_blank", "noopener,noreferrer");
-      }
+      const params = new URLSearchParams({
+        path: document.dropboxPath,
+        name: document.name,
+      });
+      const route = document.type === "PDF" ? "/api/documents/view" : "/api/documents/preview";
+      window.open(`${route}?${params.toString()}`, "_blank", "noopener,noreferrer");
     } catch (error) {
-      previewTab?.close();
       setDocumentNotice(error instanceof Error ? error.message : "Unable to open document preview.");
     } finally {
       setOpeningDocument(null);
@@ -757,6 +739,12 @@ function sourceFileUrl(source: { dropboxPath?: string; fileId?: string; filename
   return `/api/documents/view?${params.toString()}`;
 }
 
+const browserViewableCitationTypes = new Set(["pdf", "txt", "md", "csv", "html", "png", "jpg", "jpeg", "webp"]);
+
+function isBrowserViewableCitation(filename: string) {
+  return browserViewableCitationTypes.has(filename.split(".").pop()?.toLowerCase() || "");
+}
+
 function AskView({ initialQuestion = "What is our approach to regenerative forestry?", conversationId, onChatStarted, fresh = false }: { initialQuestion?: string; conversationId: string; onChatStarted: (title: string) => void; fresh?: boolean }) {
   const { user } = useAuth();
   const [history, setHistory] = useState<Array<{ role: "user" | "assistant"; content: string; citations?: ChatCitation[] }>>([]);
@@ -805,8 +793,8 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
   }, [citationStorageKey]);
 
   const openCitationSource = (source: { id: string; openUrl: string; downloadUrl: string; title: string }) => {
-    if (!source.openUrl || !user) return;
-    window.open(source.openUrl, "_blank", "noopener,noreferrer");
+    if (!user) return;
+    if (source.openUrl) window.open(source.openUrl, "_blank", "noopener,noreferrer");
     if (!source.downloadUrl || downloadedCitationIdsRef.current.has(source.id) || !citationStorageKey) return;
     const link = document.createElement("a");
     link.href = source.downloadUrl;
@@ -962,7 +950,7 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
         match: evidenceBand(source.score),
         text: source.excerpt || "This file was cited in the generated answer.",
         id: source.dropboxPath || source.fileId || `${source.filename}-${index}`,
-        openUrl: sourceFileUrl(source),
+        openUrl: isBrowserViewableCitation(source.filename) ? sourceFileUrl(source) : "",
         downloadUrl: sourceFileUrl(source, true),
       }));
   const evidenceScores = liveSources.map((source) => source.score).filter((score): score is number => typeof score === "number");
@@ -1060,11 +1048,11 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
                       {displayedSources.map((s) => (
                         <button
                           key={s.id}
-                          disabled={!s.openUrl}
+                          disabled={!s.openUrl && downloadedCitationIds.has(s.id)}
                           onClick={() => {
                             openCitationSource(s);
                           }}
-                          title={s.openUrl ? (downloadedCitationIds.has(s.id) ? `Open ${s.title}` : `Open and download ${s.title}`) : "Document file is unavailable"}
+                          title={s.openUrl ? (downloadedCitationIds.has(s.id) ? `Open ${s.title}` : `Open and download ${s.title}`) : (downloadedCitationIds.has(s.id) ? "File already downloaded" : `Download ${s.title}`)}
                         >
                           <FileText size={16} />
                           <span>{s.title}</span>
@@ -1161,11 +1149,11 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
                 <footer>
                   {s.match} source{" "}
                   <button
-                    disabled={!s.openUrl}
+                    disabled={!s.openUrl && downloadedCitationIds.has(s.id)}
                     onClick={() => {
                       openCitationSource(s);
                     }}
-                    title={s.openUrl ? (downloadedCitationIds.has(s.id) ? `Open ${s.title}` : `Open and download ${s.title}`) : "Document file is unavailable"}
+                    title={s.openUrl ? (downloadedCitationIds.has(s.id) ? `Open ${s.title}` : `Open and download ${s.title}`) : (downloadedCitationIds.has(s.id) ? "File already downloaded" : `Download ${s.title}`)}
                   >
                     Open <ExternalLink size={13} />
                   </button>
