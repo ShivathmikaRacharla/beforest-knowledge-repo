@@ -144,10 +144,28 @@ export async function getDropboxPreviewFile(dropboxPath: string, fileName?: stri
   try {
     return await previewDropboxDocument(accessToken, dropboxPath);
   } catch (error) {
+    if (mimeTypeForFileName(fileName) !== "application/octet-stream") {
+      const file = await downloadDropboxDocument(accessToken, dropboxPath);
+      return {
+        bytes: file.bytes,
+        contentType: file.contentType === "application/octet-stream" ? mimeTypeForFileName(fileName) : file.contentType,
+      };
+    }
     if (!fileName) throw error;
     const fallbackPath = await findDropboxDocumentPath(accessToken, fileName);
     if (!fallbackPath) throw error;
-    return previewDropboxDocument(accessToken, fallbackPath);
+    try {
+      return await previewDropboxDocument(accessToken, fallbackPath);
+    } catch (fallbackError) {
+      if (mimeTypeForFileName(fileName) !== "application/octet-stream") {
+        const file = await downloadDropboxDocument(accessToken, fallbackPath);
+        return {
+          bytes: file.bytes,
+          contentType: file.contentType === "application/octet-stream" ? mimeTypeForFileName(fileName) : file.contentType,
+        };
+      }
+      throw fallbackError;
+    }
   }
 }
 

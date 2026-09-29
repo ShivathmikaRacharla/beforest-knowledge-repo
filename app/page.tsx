@@ -740,9 +740,23 @@ function sourceFileUrl(source: { dropboxPath?: string; fileId?: string; filename
 }
 
 const browserViewableCitationTypes = new Set(["pdf", "txt", "md", "csv", "html", "png", "jpg", "jpeg", "webp"]);
+const dropboxPreviewCitationTypes = new Set(["ai", "doc", "docm", "docx", "eps", "gdoc", "gslides", "odp", "odt", "pps", "ppsm", "ppsx", "ppt", "pptm", "pptx", "rtf", "ods", "xls", "xlsm", "gsheet", "xlsx"]);
 
 function isBrowserViewableCitation(filename: string) {
-  return browserViewableCitationTypes.has(filename.split(".").pop()?.toLowerCase() || "");
+  const extension = filename.split(".").pop()?.toLowerCase() || "";
+  return browserViewableCitationTypes.has(extension) || dropboxPreviewCitationTypes.has(extension);
+}
+
+function citationViewUrl(source: ChatCitation) {
+  const extension = source.filename.split(".").pop()?.toLowerCase() || "";
+  if (!dropboxPreviewCitationTypes.has(extension)) return sourceFileUrl(source);
+  const dropboxPath = source.dropboxPath || source.fileId;
+  if (!dropboxPath) return "";
+  const params = new URLSearchParams({
+    path: dropboxPath,
+    name: source.filename,
+  });
+  return `/api/documents/preview?${params.toString()}`;
 }
 
 function AskView({ initialQuestion = "What is our approach to regenerative forestry?", conversationId, onChatStarted, fresh = false }: { initialQuestion?: string; conversationId: string; onChatStarted: (title: string) => void; fresh?: boolean }) {
@@ -950,7 +964,7 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
         match: evidenceBand(source.score),
         text: source.excerpt || "This file was cited in the generated answer.",
         id: source.dropboxPath || source.fileId || `${source.filename}-${index}`,
-        openUrl: isBrowserViewableCitation(source.filename) ? sourceFileUrl(source) : "",
+        openUrl: isBrowserViewableCitation(source.filename) ? citationViewUrl(source) : "",
         downloadUrl: sourceFileUrl(source, true),
       }));
   const evidenceScores = liveSources.map((source) => source.score).filter((score): score is number => typeof score === "number");
