@@ -42,16 +42,20 @@ function selectRelevantCitations(
   retrieval: Awaited<ReturnType<typeof retrieveKnowledge>>,
 ) {
   const retrievalScores = new Map<string, number>();
+  const retrievalSources = new Set<string>();
   for (const match of retrieval.matches || []) {
     const key = sourceKey(match.dropbox_path || match.file_name);
     if (!key) continue;
+    retrievalSources.add(key);
     const score = typeof match.score === "number" ? match.score : 0;
     retrievalScores.set(key, Math.max(retrievalScores.get(key) || 0, score));
   }
 
+  if (!retrievalSources.size) return [];
+
   const matched = citations.filter((citation) => {
     const key = sourceKey(citation.dropbox_path || citation.file_name);
-    return !retrievalScores.size || retrievalScores.has(key);
+    return retrievalSources.has(key);
   }).map((citation) => {
     if (typeof citation.score === "number") return citation;
     const key = sourceKey(citation.dropbox_path || citation.file_name);
@@ -113,6 +117,17 @@ function uiCitations(citations: KmsCitation[]) {
       url: citation.url,
     }];
   });
+}
+
+function isUnsupportedKnowledgeAnswer(
+  answer: KmsAnswer,
+  retrieval: Awaited<ReturnType<typeof retrieveKnowledge>>,
+) {
+  const answerText = answer.answer?.trim() || "";
+  const hasEvidence = (retrieval.matches || []).some((match) => Boolean(match.text?.trim()));
+  return answer.answered === false
+    || /i couldn't find that in the approved knowledge base/i.test(answerText)
+    || (!answerText && !hasEvidence);
 }
 
 function publicKnowledgeError(error: unknown) {
@@ -256,12 +271,17 @@ export async function POST(request: Request) {
     const systemPrompt = await getSettingValue("knowledge.systemPrompt", DEFAULT_KNOWLEDGE_SYSTEM_PROMPT);
     const retrieval = await retrieveKnowledge(message, { limit: 5 });
     const isDocumentCountQuery = isApprovedDocumentCountQuestion(message);
+    const documentNames = (retrieval.documents || [])
+      .map((document) => document.file_name || document.dropbox_path)
+      .filter((name): name is string => Boolean(name));
     let answer: KmsAnswer | null = isDocumentCountQuery
       ? {
           answered: true,
-          answer: `There are ${
-            retrieval.document_count ?? retrieval.documents?.length ?? 0
-          } approved documents available in the knowledge base.`,
+          answer: [
+            `We have ${retrieval.document_count ?? documentNames.length} unique documents in the approved knowledge base.`,
+            documentNames.length ? "The documents currently available are:" : "",
+            ...documentNames.map((name) => `- ${name}`),
+          ].filter(Boolean).join("\n\n"),
           citations: [],
         }
       : null;
@@ -274,10 +294,15 @@ export async function POST(request: Request) {
         answer = fallbackAnswerFromRetrieval(retrieval);
       }
     }
-    const citations = uiCitations(isDocumentCountQuery
-      ? citationsForDocumentList(retrieval.documents, retrieval)
-      : selectRelevantCitations(answer.citations || [], retrieval));
-    const responseText = answer.answer || "I could not find an answer in the approved knowledge base.";
+    const unsupportedAnswer = !isDocumentCountQuery && isUnsupportedKnowledgeAnswer(answer, retrieval);
+    const citations = unsupportedAnswer
+      ? []
+      : uiCitations(isDocumentCountQuery
+        ? citationsForDocumentList(retrieval.documents, retrieval)
+        : selectRelevantCitations(answer.citations || [], retrieval));
+    const responseText = unsupportedAnswer
+      ? "I couldn't find that in the approved knowledge base."
+      : answer.answer || "I couldn't find that in the approved knowledge base.";
     const scores = (retrieval.matches || [])
       .map((match) => match.score)
       .filter((score): score is number => typeof score === "number");

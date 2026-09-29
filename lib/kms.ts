@@ -122,13 +122,27 @@ export function spaceFromDropboxPath(dropboxPath?: string) {
 }
 
 export function isApprovedDocumentCountQuestion(question: string) {
-  return /\b(how many|number of|count)\b/i.test(question)
+  const asksForCount = /\b(how many|number of|count)\b/i.test(question)
     && /\b(approved|indexed|available|retrievable)?\s*documents?\b/i.test(question);
+  const asksForDocumentList = /\bdocuments\b/i.test(question)
+    && (
+      /\b(?:what|which)\s+documents?\b.*\b(?:do we have|are there|available|in)\b/i.test(question)
+      || /\blist\b.*\bdocuments?\b/i.test(question)
+      || /\bdocuments?\b.*\b(?:available|in the knowledge base)\b/i.test(question)
+    );
+  return asksForCount || asksForDocumentList;
+}
+
+export function expandRetrievalQuery(question: string) {
+  if (/\brag\b/i.test(question) && !/retrieval[- ]augmented generation/i.test(question)) {
+    return `${question} Retrieval-Augmented Generation`;
+  }
+  return question;
 }
 
 export async function retrieveKnowledge(question: string, options?: { department?: string; limit?: number }) {
   const retrieval = await runWindmillScript<KmsRetrieval>("f/kms/retrieve_qdrant_chunks", {
-    question,
+    question: expandRetrievalQuery(question),
     department: options?.department,
     limit: options?.limit ?? 5,
   }, { timeoutMs: 25_000 });
