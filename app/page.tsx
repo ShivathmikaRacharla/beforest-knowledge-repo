@@ -957,7 +957,7 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
     }
   };
 
-  const displayedSources = uniqueCitations(liveSources).slice(0, 1).map((source, index) => ({
+  const displayedSources = uniqueCitations(liveSources).map((source, index) => ({
         title: source.filename,
         page: null as number | null,
         score: source.score,

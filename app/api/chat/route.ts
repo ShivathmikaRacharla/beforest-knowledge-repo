@@ -73,6 +73,26 @@ function selectRelevantCitations(
   ];
 }
 
+function citationsForDocumentList(
+  documents: Awaited<ReturnType<typeof retrieveKnowledge>>["documents"],
+  retrieval: Awaited<ReturnType<typeof retrieveKnowledge>>,
+) {
+  const retrievalScores = new Map<string, number>();
+  for (const match of retrieval.matches || []) {
+    const key = sourceKey(match.dropbox_path || match.file_name);
+    if (!key || typeof match.score !== "number") continue;
+    retrievalScores.set(key, Math.max(retrievalScores.get(key) || 0, match.score));
+  }
+  return (documents || []).map((document) => {
+    const key = sourceKey(document.dropbox_path || document.file_name);
+    return {
+      file_name: document.file_name,
+      dropbox_path: document.dropbox_path,
+      score: retrievalScores.get(key),
+    };
+  });
+}
+
 function uiCitations(citations: KmsCitation[]) {
   const seen = new Set<string>();
   return citations.flatMap((citation, index) => {
@@ -235,7 +255,8 @@ export async function POST(request: Request) {
     const startedAt = Date.now();
     const systemPrompt = await getSettingValue("knowledge.systemPrompt", DEFAULT_KNOWLEDGE_SYSTEM_PROMPT);
     const retrieval = await retrieveKnowledge(message, { limit: 5 });
-    let answer: KmsAnswer | null = isApprovedDocumentCountQuestion(message)
+    const isDocumentCountQuery = isApprovedDocumentCountQuestion(message);
+    let answer: KmsAnswer | null = isDocumentCountQuery
       ? {
           answered: true,
           answer: `There are ${
@@ -253,7 +274,9 @@ export async function POST(request: Request) {
         answer = fallbackAnswerFromRetrieval(retrieval);
       }
     }
-    const citations = uiCitations(selectRelevantCitations(answer.citations || [], retrieval));
+    const citations = uiCitations(isDocumentCountQuery
+      ? citationsForDocumentList(retrieval.documents, retrieval)
+      : selectRelevantCitations(answer.citations || [], retrieval));
     const responseText = answer.answer || "I could not find an answer in the approved knowledge base.";
     const scores = (retrieval.matches || [])
       .map((match) => match.score)

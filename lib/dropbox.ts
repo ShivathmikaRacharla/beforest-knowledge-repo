@@ -113,10 +113,21 @@ function mimeTypeForFileName(fileName?: string) {
   if (extension === "md") return "text/markdown; charset=utf-8";
   if (extension === "csv") return "text/csv; charset=utf-8";
   if (extension === "html") return "text/html; charset=utf-8";
+  if (extension === "json" || extension === "xml") return "text/plain; charset=utf-8";
   if (extension === "png") return "image/png";
   if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
   if (extension === "webp") return "image/webp";
   return "application/octet-stream";
+}
+
+function hasFileExtension(fileName?: string) {
+  return Boolean(fileName && /\.[^./\\]+$/.test(fileName));
+}
+
+function inlineContentType(fileName: string | undefined, dropboxPath: string) {
+  const contentType = mimeTypeForFileName(fileName || dropboxPath);
+  if (contentType !== "application/octet-stream") return contentType;
+  return hasFileExtension(fileName || dropboxPath) ? contentType : "text/plain; charset=utf-8";
 }
 
 export async function getDropboxDocumentFile(dropboxPath: string, fileName?: string) {
@@ -141,15 +152,21 @@ export async function getDropboxDocumentFile(dropboxPath: string, fileName?: str
 
 export async function getDropboxPreviewFile(dropboxPath: string, fileName?: string) {
   const accessToken = await getDropboxAccessToken();
+  const inlineType = inlineContentType(fileName, dropboxPath);
+  const canStreamInline = inlineType !== "application/octet-stream";
   try {
     return await previewDropboxDocument(accessToken, dropboxPath);
   } catch (error) {
-    if (mimeTypeForFileName(fileName) !== "application/octet-stream") {
-      const file = await downloadDropboxDocument(accessToken, dropboxPath);
-      return {
-        bytes: file.bytes,
-        contentType: file.contentType === "application/octet-stream" ? mimeTypeForFileName(fileName) : file.contentType,
-      };
+    if (canStreamInline) {
+      try {
+        const file = await downloadDropboxDocument(accessToken, dropboxPath);
+        return {
+          bytes: file.bytes,
+          contentType: file.contentType === "application/octet-stream" ? inlineType : file.contentType,
+        };
+      } catch {
+        // Continue with filename recovery when the stored path is stale.
+      }
     }
     if (!fileName) throw error;
     const fallbackPath = await findDropboxDocumentPath(accessToken, fileName);
@@ -157,11 +174,11 @@ export async function getDropboxPreviewFile(dropboxPath: string, fileName?: stri
     try {
       return await previewDropboxDocument(accessToken, fallbackPath);
     } catch (fallbackError) {
-      if (mimeTypeForFileName(fileName) !== "application/octet-stream") {
+      if (canStreamInline) {
         const file = await downloadDropboxDocument(accessToken, fallbackPath);
         return {
           bytes: file.bytes,
-          contentType: file.contentType === "application/octet-stream" ? mimeTypeForFileName(fileName) : file.contentType,
+          contentType: file.contentType === "application/octet-stream" ? inlineType : file.contentType,
         };
       }
       throw fallbackError;
