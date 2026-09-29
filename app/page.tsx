@@ -458,12 +458,36 @@ function KnowledgeView({ role }: { role: Role }) {
   const openDocument = async (document: KnowledgeDocument) => {
     if (!document.dropboxPath || openingDocument) return;
     setOpeningDocument(document.id);
-    const params = new URLSearchParams({
-      path: document.dropboxPath,
-      name: document.name,
-    });
-    window.open(`/api/documents/view?${params.toString()}`, "_blank", "noopener,noreferrer");
-    window.setTimeout(() => setOpeningDocument(null), 500);
+    const previewTab = document.type === "PDF" ? null : window.open("about:blank", "_blank");
+    try {
+      let targetUrl: string;
+      if (document.type === "PDF") {
+        const params = new URLSearchParams({
+          path: document.dropboxPath,
+          name: document.name,
+        });
+        targetUrl = `/api/documents/view?${params.toString()}`;
+      } else {
+        const response = await fetch("/api/documents/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dropboxPath: document.dropboxPath, fileName: document.name }),
+        });
+        const data = (await response.json().catch(() => ({}))) as { url?: string; error?: string };
+        if (!response.ok || !data.url) throw new Error(data.error || "Unable to open document preview.");
+        targetUrl = data.url;
+      }
+      if (previewTab) {
+        previewTab.location.href = targetUrl;
+      } else {
+        window.open(targetUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      previewTab?.close();
+      setDocumentNotice(error instanceof Error ? error.message : "Unable to open document preview.");
+    } finally {
+      setOpeningDocument(null);
+    }
   };
   const deleteDocument = async (document: KnowledgeDocument) => {
     if (role !== "Admin" || deletingDocumentId) return;
@@ -733,20 +757,8 @@ function sourceFileUrl(source: { dropboxPath?: string; fileId?: string; filename
   return `/api/documents/view?${params.toString()}`;
 }
 
-function openAndDownloadSource(source: { openUrl: string; downloadUrl: string; title: string }) {
-  if (!source.openUrl) return;
-  window.open(source.openUrl, "_blank", "noopener,noreferrer");
-  if (!source.downloadUrl) return;
-  const link = document.createElement("a");
-  link.href = source.downloadUrl;
-  link.download = source.title;
-  link.rel = "noopener noreferrer";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-}
-
 function AskView({ initialQuestion = "What is our approach to regenerative forestry?", conversationId, onChatStarted, fresh = false }: { initialQuestion?: string; conversationId: string; onChatStarted: (title: string) => void; fresh?: boolean }) {
+  const { user } = useAuth();
   const [history, setHistory] = useState<Array<{ role: "user" | "assistant"; content: string; citations?: ChatCitation[] }>>([]);
   const [query, setQuery] = useState("");
   const [askedQuestion, setAskedQuestion] = useState(initialQuestion);
@@ -767,7 +779,52 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
   const [details, setDetails] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [appearanceThumbnail, setAppearanceThumbnail] = useState("");
+  const [downloadedCitationIds, setDownloadedCitationIds] = useState<Set<string>>(new Set());
+  const downloadedCitationIdsRef = useRef<Set<string>>(new Set());
   const sessionId = conversationId;
+  const citationStorageKey = user ? `beforest:citation-downloads:${user.id}` : null;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (!citationStorageKey) {
+        downloadedCitationIdsRef.current = new Set();
+        setDownloadedCitationIds(new Set());
+        return;
+      }
+      try {
+        const stored = JSON.parse(window.localStorage.getItem(citationStorageKey) || "[]") as unknown;
+        const ids = new Set(Array.isArray(stored) ? stored.filter((value): value is string => typeof value === "string") : []);
+        downloadedCitationIdsRef.current = ids;
+        setDownloadedCitationIds(ids);
+      } catch {
+        downloadedCitationIdsRef.current = new Set();
+        setDownloadedCitationIds(new Set());
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [citationStorageKey]);
+
+  const openCitationSource = (source: { id: string; openUrl: string; downloadUrl: string; title: string }) => {
+    if (!source.openUrl || !user) return;
+    window.open(source.openUrl, "_blank", "noopener,noreferrer");
+    if (!source.downloadUrl || downloadedCitationIdsRef.current.has(source.id) || !citationStorageKey) return;
+    const link = document.createElement("a");
+    link.href = source.downloadUrl;
+    link.download = source.title;
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    downloadedCitationIdsRef.current.add(source.id);
+    const next = new Set(downloadedCitationIds);
+    next.add(source.id);
+    setDownloadedCitationIds(next);
+    try {
+      window.localStorage.setItem(citationStorageKey, JSON.stringify([...next]));
+    } catch {
+      // Viewing still works when browser storage is unavailable.
+    }
+  };
 
   useEffect(() => {
     void fetch("/api/appearance")
@@ -1005,9 +1062,9 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
                           key={s.id}
                           disabled={!s.openUrl}
                           onClick={() => {
-                            openAndDownloadSource(s);
+                            openCitationSource(s);
                           }}
-                          title={s.openUrl ? `Open and download ${s.title}` : "Document file is unavailable"}
+                          title={s.openUrl ? (downloadedCitationIds.has(s.id) ? `Open ${s.title}` : `Open and download ${s.title}`) : "Document file is unavailable"}
                         >
                           <FileText size={16} />
                           <span>{s.title}</span>
@@ -1106,9 +1163,9 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
                   <button
                     disabled={!s.openUrl}
                     onClick={() => {
-                      openAndDownloadSource(s);
+                      openCitationSource(s);
                     }}
-                    title={s.openUrl ? `Open and download ${s.title}` : "Document file is unavailable"}
+                    title={s.openUrl ? (downloadedCitationIds.has(s.id) ? `Open ${s.title}` : `Open and download ${s.title}`) : "Document file is unavailable"}
                   >
                     Open <ExternalLink size={13} />
                   </button>
