@@ -159,6 +159,7 @@ function Sidebar({
   selectedChatId: string;
   recentChats: ConversationSummary[];
 }) {
+  const [recentChatsOpen, setRecentChatsOpen] = useState(true);
   const items = [
     { id: "knowledge" as View, label: "Knowledge", icon: BookOpen },
     { id: "ask" as View, label: "Ask Beforest", icon: MessageSquareText },
@@ -198,8 +199,21 @@ function Sidebar({
             <span>New chat</span>
             <span className="new-chat-plus">+</span>
           </button>
-          <div className="chat-sidebar-heading recent-heading">Recent chats</div>
-          {recentChats.map((chat) => <button className={`chat-sidebar-row chat-history ${selectedChatId === chat.id ? "selected" : ""}`} key={chat.id} onClick={() => onSelectChat(chat)}><Clock3 size={15} /><span>{chat.title}</span></button>)}
+          <div className="chat-sidebar-heading recent-heading">
+            <span>Recent chats</span>
+            <button
+              type="button"
+              aria-label={recentChatsOpen ? "Collapse recent chats" : "Expand recent chats"}
+              aria-expanded={recentChatsOpen}
+              aria-controls="recent-chat-list"
+              onClick={() => setRecentChatsOpen((open) => !open)}
+            >
+              <ChevronDown className={recentChatsOpen ? "" : "collapsed"} size={15} />
+            </button>
+          </div>
+          <div id="recent-chat-list" hidden={!recentChatsOpen}>
+            {recentChats.map((chat) => <button className={`chat-sidebar-row chat-history ${selectedChatId === chat.id ? "selected" : ""}`} key={chat.id} onClick={() => onSelectChat(chat)}><Clock3 size={15} /><span>{chat.title}</span></button>)}
+          </div>
         </div>
       </aside>
     </>
