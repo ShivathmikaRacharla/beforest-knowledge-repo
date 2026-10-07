@@ -675,7 +675,12 @@ button {
 .file-name > span {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-width: 0;
+}
+.knowledge-download-button {
+  flex: 0 0 auto;
+  text-decoration: none;
 }
 .file-name strong {
   overflow: hidden;
