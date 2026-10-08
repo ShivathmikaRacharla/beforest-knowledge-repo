@@ -38,32 +38,14 @@ function sourceKey(source?: string | null) {
 }
 
 function selectRelevantCitations(
-  citations: KmsCitation[],
+  sourceIds: string[],
   retrieval: Awaited<ReturnType<typeof retrieveKnowledge>>,
-  answerText: string,
 ) {
-  const retrievalScores = new Map<string, number>();
-  const retrievalSources = new Set<string>();
-  for (const match of retrieval.matches || []) {
-    const key = sourceKey(match.dropbox_path || match.file_name);
-    if (!key) continue;
-    retrievalSources.add(key);
-    const score = typeof match.score === "number" ? match.score : 0;
-    retrievalScores.set(key, Math.max(retrievalScores.get(key) || 0, score));
-  }
-
-  if (!retrievalSources.size) return [];
-
-  const namedSources = new Map<string, NonNullable<typeof retrieval.matches>[number]>();
-  for (const match of retrieval.matches || []) {
-    const key = sourceKey(match.dropbox_path || match.file_name);
-    if (key && answerText.toLowerCase().includes(key)) {
-      const previous = namedSources.get(key);
-      if (!previous || (match.score ?? 0) > (previous.score ?? 0)) namedSources.set(key, match);
-    }
-  }
-  if (namedSources.size === 1) {
-    const match = [...namedSources.values()][0];
+  const matches = retrieval.matches || [];
+  return sourceIds.flatMap((sourceId) => {
+    const index = /^S([1-9]\d*)$/.exec(sourceId)?.[1];
+    const match = index ? matches[Number(index) - 1] : undefined;
+    if (!match || !sourceKey(match.dropbox_path || match.file_name)) return [];
     return [{
       file_name: match.file_name,
       dropbox_path: match.dropbox_path,
@@ -71,30 +53,7 @@ function selectRelevantCitations(
       section: match.section,
       score: match.score,
     }];
-  }
-
-  const matched = citations.filter((citation) => {
-    const key = sourceKey(citation.dropbox_path || citation.file_name);
-    return retrievalSources.has(key);
-  }).map((citation) => {
-    if (typeof citation.score === "number") return citation;
-    const key = sourceKey(citation.dropbox_path || citation.file_name);
-    const score = retrievalScores.get(key);
-    return typeof score === "number" ? { ...citation, score } : citation;
   });
-  if (matched.length <= 1) return matched;
-
-  // Keep the one document with the strongest evidence so unrelated retrieved
-  // documents do not appear as if they supported the answer.
-  return [
-    [...matched].sort((left, right) => {
-      const leftKey = sourceKey(left.dropbox_path || left.file_name);
-      const rightKey = sourceKey(right.dropbox_path || right.file_name);
-      const leftScore = typeof left.score === "number" ? left.score : retrievalScores.get(leftKey) || 0;
-      const rightScore = typeof right.score === "number" ? right.score : retrievalScores.get(rightKey) || 0;
-      return rightScore - leftScore;
-    })[0],
-  ];
 }
 
 function citationsForDocumentList(
@@ -305,6 +264,7 @@ export async function POST(request: Request) {
           citations: [],
         }
       : null;
+    let usedRetrievalFallback = false;
     if (!answer) {
       try {
         answer = await generateGroundedAnswerWithRetry(message, retrieval, systemPrompt);
@@ -312,6 +272,7 @@ export async function POST(request: Request) {
         if (!canFallbackToRetrievedAnswer(error)) throw error;
         console.warn("Using retrieval fallback because answer generation is unavailable", error);
         answer = fallbackAnswerFromRetrieval(retrieval);
+        usedRetrievalFallback = true;
       }
     }
     const unsupportedAnswer = !isDocumentCountQuery && isUnsupportedKnowledgeAnswer(answer, retrieval);
@@ -319,7 +280,9 @@ export async function POST(request: Request) {
       ? []
       : uiCitations(isDocumentCountQuery
         ? citationsForDocumentList(retrieval.documents, retrieval)
-        : selectRelevantCitations(answer.citations || [], retrieval, answer.answer || ""));
+        : usedRetrievalFallback
+          ? answer.citations || []
+          : selectRelevantCitations(answer.source_ids || [], retrieval));
     const responseText = unsupportedAnswer
       ? "I couldn't find that in the approved knowledge base."
       : answer.answer || "I couldn't find that in the approved knowledge base.";

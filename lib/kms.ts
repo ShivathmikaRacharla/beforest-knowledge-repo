@@ -40,6 +40,7 @@ export type KmsAnswer = {
   answered?: boolean;
   answer?: string;
   citations?: KmsCitation[];
+  source_ids?: string[];
 };
 
 type KnowledgeDocumentsResult = {
