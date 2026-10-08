@@ -40,6 +40,7 @@ function sourceKey(source?: string | null) {
 function selectRelevantCitations(
   citations: KmsCitation[],
   retrieval: Awaited<ReturnType<typeof retrieveKnowledge>>,
+  answerText: string,
 ) {
   const retrievalScores = new Map<string, number>();
   const retrievalSources = new Set<string>();
@@ -52,6 +53,25 @@ function selectRelevantCitations(
   }
 
   if (!retrievalSources.size) return [];
+
+  const namedSources = new Map<string, NonNullable<typeof retrieval.matches>[number]>();
+  for (const match of retrieval.matches || []) {
+    const key = sourceKey(match.dropbox_path || match.file_name);
+    if (key && answerText.toLowerCase().includes(key)) {
+      const previous = namedSources.get(key);
+      if (!previous || (match.score ?? 0) > (previous.score ?? 0)) namedSources.set(key, match);
+    }
+  }
+  if (namedSources.size === 1) {
+    const match = [...namedSources.values()][0];
+    return [{
+      file_name: match.file_name,
+      dropbox_path: match.dropbox_path,
+      page_number: match.page_number,
+      section: match.section,
+      score: match.score,
+    }];
+  }
 
   const matched = citations.filter((citation) => {
     const key = sourceKey(citation.dropbox_path || citation.file_name);
@@ -299,7 +319,7 @@ export async function POST(request: Request) {
       ? []
       : uiCitations(isDocumentCountQuery
         ? citationsForDocumentList(retrieval.documents, retrieval)
-        : selectRelevantCitations(answer.citations || [], retrieval));
+        : selectRelevantCitations(answer.citations || [], retrieval, answer.answer || ""));
     const responseText = unsupportedAnswer
       ? "I couldn't find that in the approved knowledge base."
       : answer.answer || "I couldn't find that in the approved knowledge base.";
