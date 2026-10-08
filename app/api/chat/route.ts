@@ -9,14 +9,10 @@ import {
 } from "@/lib/kms";
 import { getSettingValue, saveQueryEvent } from "@/lib/db";
 import { DEFAULT_KNOWLEDGE_SYSTEM_PROMPT } from "@/lib/prompts";
+import { buildFollowUpContext, matchesReferencedDocument, type ConversationTurn } from "@/lib/chat-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-
-type ChatTurn = {
-  role: "user" | "assistant";
-  content: string;
-};
 
 function isGreetingOnly(message: string) {
   const normalized = message.toLowerCase().replace(/[^a-z\s]/g, " ").trim();
@@ -212,7 +208,7 @@ export async function POST(request: Request) {
     if ("response" in auth) return auth.response;
     const body = (await request.json()) as {
       message?: string;
-      history?: ChatTurn[];
+      history?: ConversationTurn[];
       projectName?: string;
       sessionId?: string;
       stream?: boolean;
@@ -248,7 +244,14 @@ export async function POST(request: Request) {
 
     const startedAt = Date.now();
     const systemPrompt = await getSettingValue("knowledge.systemPrompt", DEFAULT_KNOWLEDGE_SYSTEM_PROMPT);
-    const retrieval = await retrieveKnowledge(message, { limit: 5 });
+    const followUp = buildFollowUpContext(message, body.history);
+    const retrieval = await retrieveKnowledge(followUp?.retrievalQuestion || message, { limit: 5 });
+    const referencedDocumentKey = followUp?.documentKey;
+    if (referencedDocumentKey) {
+      retrieval.matches = (retrieval.matches || []).filter((match) =>
+        matchesReferencedDocument(match, referencedDocumentKey),
+      );
+    }
     const isDocumentCountQuery = isApprovedDocumentCountQuestion(message);
     const documentNames = (retrieval.documents || [])
       .map((document) => document.file_name || document.dropbox_path)
@@ -267,7 +270,7 @@ export async function POST(request: Request) {
     let usedRetrievalFallback = false;
     if (!answer) {
       try {
-        answer = await generateGroundedAnswerWithRetry(message, retrieval, systemPrompt);
+        answer = await generateGroundedAnswerWithRetry(followUp?.answerQuestion || message, retrieval, systemPrompt);
       } catch (error) {
         if (!canFallbackToRetrievedAnswer(error)) throw error;
         console.warn("Using retrieval fallback because answer generation is unavailable", error);
