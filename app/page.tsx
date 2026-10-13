@@ -19,6 +19,7 @@ import {
   Menu,
   MessageSquareText,
   MoreHorizontal,
+  RefreshCw,
   Search,
   Settings,
   ShieldCheck,
@@ -34,6 +35,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useAuth, type AuthUser, type Role } from "./auth-provider";
 import { DEFAULT_KNOWLEDGE_SYSTEM_PROMPT } from "@/lib/prompts";
+import type { HealthDocument, HealthStageState } from "@/lib/knowledge-health";
 
 type View = "knowledge" | "ask" | "web" | "admin";
 type ConversationSummary = {
@@ -1283,6 +1285,7 @@ function WebView() {
 
 const adminTabs = [
   "Overview",
+  "Knowledge health",
   "Users",
   "Documents",
   "Search history",
@@ -1492,6 +1495,11 @@ function AdminGeneric({ tab }: { tab: string }) {
       "Review extraction, indexing, permissions, and publication status.",
       <AdminDocuments key="docs" />,
     ],
+    "Knowledge health": [
+      "Knowledge health",
+      "Track document processing and verify retrieval readiness.",
+      <AdminKnowledgeHealth key="knowledge-health" />,
+    ],
     "Search history": [
       "Search history",
       "Inspect user queries, selected evidence, feedback, and latency.",
@@ -1560,6 +1568,140 @@ function AdminGeneric({ tab }: { tab: string }) {
       {body}
     </section>
   );
+}
+
+type HealthTrace = {
+  runId: string;
+  fileName: string;
+  stages: Array<{ id: string; state: string; jobId: string | null; startedAt: string | null; completedAt: string | null; count: number | null; countLabel: string }>;
+};
+
+function healthStateIcon(state: HealthStageState) {
+  if (state === "complete") return <CheckCircle2 size={18} />;
+  if (state === "failed") return <AlertCircle size={18} />;
+  if (state === "active") return <Clock3 size={18} />;
+  return <span className="health-stage-dot" aria-hidden="true" />;
+}
+
+function AdminKnowledgeHealth() {
+  const [documents, setDocuments] = useState<HealthDocument[]>([]);
+  const [warning, setWarning] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [trace, setTrace] = useState<HealthTrace | null>(null);
+  const [traceLoading, setTraceLoading] = useState(false);
+  const traceRequest = useRef(0);
+  const [checks, setChecks] = useState<Record<string, { passed: boolean; matchingChunks: number; checkedAt: string }>>({});
+  const [checkingId, setCheckingId] = useState<string | null>(null);
+
+  const load = useCallback(async (force = false, silent = false) => {
+    if (force && !silent) setRefreshing(true);
+    try {
+      const response = await fetch(`/api/admin/knowledge-health${force ? "?refresh=1" : ""}`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to load knowledge health.");
+      setDocuments(data.documents || []);
+      setWarning(data.warning || "");
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to load knowledge health.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+  useEffect(() => {
+    const timer = window.setInterval(() => { void load(true, true); }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
+  const selected = documents.find((document) => document.id === selectedId) || null;
+  const selectDocument = async (document: HealthDocument) => {
+    const requestId = ++traceRequest.current;
+    setSelectedId(document.id);
+    setTrace(null);
+    if (!document.runId) { setTraceLoading(false); return; }
+    setTraceLoading(true);
+    try {
+      const response = await fetch(`/api/admin/knowledge-health?runId=${encodeURIComponent(document.runId)}`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Trace unavailable.");
+      if (requestId === traceRequest.current) setTrace(data);
+    } catch {
+      if (requestId === traceRequest.current) setTrace(null);
+    } finally {
+      if (requestId === traceRequest.current) setTraceLoading(false);
+    }
+  };
+  const checkRetrieval = async (document: HealthDocument) => {
+    setCheckingId(document.id);
+    try {
+      const response = await fetch("/api/admin/knowledge-health", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentId: document.dropboxPath || document.fileName }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Retrieval check unavailable.");
+      setChecks((current) => ({ ...current, [document.id]: data }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Retrieval check unavailable.");
+    } finally {
+      setCheckingId(null);
+    }
+  };
+  const counts = {
+    ready: documents.filter((document) => document.status === "ready").length,
+    processing: documents.filter((document) => document.status === "processing").length,
+    failed: documents.filter((document) => document.status === "failed").length,
+    indexed: documents.filter((document) => document.status === "indexed").length,
+  };
+  return <div className="knowledge-health">
+    <div className="knowledge-health-toolbar"><p>Stages come from Windmill processing runs. Refreshes every minute while this tab is open; retrieval checks run only when requested.</p><button className="secondary" onClick={() => void load(true)} disabled={refreshing}><RefreshCw size={15} />{refreshing ? "Refreshing…" : "Refresh"}</button></div>
+    {warning && <div className="knowledge-notice" role="status">{warning}</div>}
+    {error && <div className="knowledge-notice" role="alert">{error}</div>}
+    <div className="health-summary">
+      <div><span>Ready</span><strong>{counts.ready}</strong><small>Completed flow runs</small></div>
+      <div><span>Processing</span><strong>{counts.processing}</strong><small>Active or queued runs</small></div>
+      <div><span>Needs attention</span><strong>{counts.failed}</strong><small>Latest run failed</small></div>
+      <div><span>History unavailable</span><strong>{counts.indexed}</strong><small>Indexed legacy documents</small></div>
+    </div>
+    <div className="health-layout">
+      <div className="health-table-wrap"><div className="health-table-heading"><h3>Document processing</h3><small>{documents.length} document{documents.length === 1 ? "" : "s"}</small></div>
+        {loading ? <div className="empty-admin-panel">Loading document processing…</div> : !documents.length ? <div className="empty-admin-panel">No document processing records are available.</div> : <div className="health-table-scroll"><div className="health-table">
+          <div className="health-table-head"><span>Document</span><span>Processing stages</span><span>Status</span><span>Actions</span></div>
+          {documents.map((document) => <div className={`health-table-row ${selectedId === document.id ? "selected" : ""}`} key={document.id}>
+            <div className="health-document-name"><FileText size={18} /><span><strong>{document.fileName}</strong>{document.updatedAt && <small>Updated {new Date(document.updatedAt).toLocaleString()}</small>}</span></div>
+            <div className="health-stage-track" aria-label={`Processing stages for ${document.fileName}`}>
+              {document.stages.map((stage) => <div className={`health-stage ${stage.state}`} key={stage.id} title={`${stage.label}: ${stage.state}`}><span>{healthStateIcon(stage.state)}</span><small>{stage.label}</small></div>)}
+            </div>
+            <div><span className={`health-status ${document.status}`}>{document.status === "indexed" ? "Indexed · no history" : document.status === "failed" ? "Needs attention" : document.status === "ready" ? "Ready" : "Processing"}</span></div>
+            <button className="health-trace-button" onClick={() => void selectDocument(document)}>View trace <ArrowRight size={14} /></button>
+          </div>)}
+        </div></div>}
+      </div>
+      <aside className="health-trace-panel" aria-label="Processing trace">
+        <div className="health-trace-heading"><h3>Processing trace</h3>{selected && <button className="icon-btn" onClick={() => { traceRequest.current++; setSelectedId(null); setTrace(null); setTraceLoading(false); }} aria-label="Close trace"><X size={16} /></button>}</div>
+        {!selected ? <p className="health-trace-empty">Select a document to inspect its stages and run a retrieval check.</p> : <>
+          <strong className="health-trace-name">{selected.fileName}</strong>
+          {selected.note && <p className="health-trace-note">{selected.note}</p>}
+          {traceLoading ? <p>Loading stage details…</p> : trace ? <ol className="health-trace-timeline">{trace.stages.map((stage) => <li key={stage.id} className={stage.state.toLowerCase()}><strong>{selected.stages.find((item) => item.id === stage.id)?.label || stage.id}</strong><small>{stage.count !== null ? `${stage.count} ${stage.countLabel} · ` : ""}{stage.completedAt ? new Date(stage.completedAt).toLocaleString() : stage.startedAt ? `Started ${new Date(stage.startedAt).toLocaleString()}` : stage.state}</small>{stage.jobId && <code title="Windmill step job ID">{stage.jobId}</code>}</li>)}</ol> : selected.runId ? <p className="health-trace-note">Stage details are temporarily unavailable.</p> : null}
+          <div className="health-retrieval-check"><h4>Retrieval check</h4><p>Search this indexed document by its exact title and confirm a matching chunk is returned.</p>
+            <button className="secondary" disabled={checkingId === selected.id || selected.status === "processing" || (selected.status === "failed" && !selected.note)} onClick={() => void checkRetrieval(selected)}>{checkingId === selected.id ? "Checking…" : "Run retrieval check"}</button>
+            {checks[selected.id] && <p className={checks[selected.id].passed ? "health-check-pass" : "health-check-fail"} role="status">{checks[selected.id].passed ? `Available · ${checks[selected.id].matchingChunks} matching chunks` : "No matching chunks returned"} · {new Date(checks[selected.id].checkedAt).toLocaleString()}</p>}
+          </div>
+          {selected.runId && <small className="health-run-id">Windmill run: {selected.runId}</small>}
+        </>}
+      </aside>
+    </div>
+  </div>;
 }
 
 function AdminDocuments() {
