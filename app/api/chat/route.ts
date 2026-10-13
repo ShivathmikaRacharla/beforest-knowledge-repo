@@ -10,6 +10,7 @@ import {
 import { getSettingValue, saveQueryEvent } from "@/lib/db";
 import { DEFAULT_KNOWLEDGE_SYSTEM_PROMPT } from "@/lib/prompts";
 import { buildFollowUpContext, matchesReferencedDocument, type ConversationTurn } from "@/lib/chat-context";
+import { addFuzzyTitleLookup } from "@/lib/fuzzy-retrieval";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -245,14 +246,18 @@ export async function POST(request: Request) {
     const startedAt = Date.now();
     const systemPrompt = await getSettingValue("knowledge.systemPrompt", DEFAULT_KNOWLEDGE_SYSTEM_PROMPT);
     const followUp = buildFollowUpContext(message, body.history);
-    const retrieval = await retrieveKnowledge(followUp?.retrievalQuestion || message, { limit: 5 });
+    const retrievalQuestion = followUp?.retrievalQuestion || message;
+    const originalRetrieval = await retrieveKnowledge(retrievalQuestion, { limit: 5 });
+    const isDocumentCountQuery = isApprovedDocumentCountQuestion(message);
+    const retrieval = isDocumentCountQuery
+      ? originalRetrieval
+      : (await addFuzzyTitleLookup(retrievalQuestion, originalRetrieval, (title) => retrieveKnowledge(title, { limit: 5 }))).retrieval;
     const referencedDocumentKey = followUp?.documentKey;
     if (referencedDocumentKey) {
       retrieval.matches = (retrieval.matches || []).filter((match) =>
         matchesReferencedDocument(match, referencedDocumentKey),
       );
     }
-    const isDocumentCountQuery = isApprovedDocumentCountQuestion(message);
     const documentNames = (retrieval.documents || [])
       .map((document) => document.file_name || document.dropbox_path)
       .filter((name): name is string => Boolean(name));
