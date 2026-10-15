@@ -1576,6 +1576,8 @@ type HealthTrace = {
   stages: Array<{ id: string; state: string; jobId: string | null; startedAt: string | null; completedAt: string | null; count: number | null; countLabel: string }>;
 };
 
+type MonthlySuccessRate = { year: number; month: number; successful: number; failed: number; rate: number };
+
 function healthStateIcon(state: HealthStageState) {
   if (state === "complete") return <CheckCircle2 size={18} />;
   if (state === "failed") return <AlertCircle size={18} />;
@@ -1586,9 +1588,12 @@ function healthStateIcon(state: HealthStageState) {
 function AdminKnowledgeHealth() {
   const [documents, setDocuments] = useState<HealthDocument[]>([]);
   const [monthly, setMonthly] = useState<MonthlyProcessing[]>([]);
+  const [successRates, setSuccessRates] = useState<MonthlySuccessRate[]>([]);
   const [monthlyWarning, setMonthlyWarning] = useState("");
   const [monthlyLoading, setMonthlyLoading] = useState(true);
   const [chartYear, setChartYear] = useState(() => new Date().getFullYear());
+  const [chartView, setChartView] = useState<"volume" | "success">("volume");
+  const [selectedRateMonth, setSelectedRateMonth] = useState<number | null>(null);
   const [warning, setWarning] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1623,6 +1628,7 @@ function AdminKnowledgeHealth() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Monthly processing history is unavailable.");
       setMonthly(data.monthly || []);
+      setSuccessRates(data.successRates || []);
       setMonthlyWarning(data.warning || "");
     } catch (caught) {
       setMonthlyWarning(caught instanceof Error ? caught.message : "Monthly processing history is unavailable.");
@@ -1648,13 +1654,28 @@ function AdminKnowledgeHealth() {
     return () => window.clearInterval(timer);
   }, [loadMonthly]);
 
-  const years = [...new Set([new Date().getFullYear(), ...monthly.map((item) => item.year)])].sort((a, b) => b - a);
+  const years = [...new Set([new Date().getFullYear(), ...monthly.map((item) => item.year), ...successRates.map((item) => item.year)])].sort((a, b) => b - a);
   const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const chartMonths = monthNames.map((name, index) => {
+  const allChartMonths = monthNames.map((name, index) => {
     const item = monthly.find((entry) => entry.year === chartYear && entry.month === index + 1);
-    return { name, chunked: item?.chunked || 0, embedded: item?.embedded || 0 };
+    const rate = successRates.find((entry) => entry.year === chartYear && entry.month === index + 1);
+    return { name, month: index + 1, chunked: item?.chunked || 0, embedded: item?.embedded || 0, rate };
   });
+  const activeMonths = allChartMonths.filter((item) => item.chunked || item.embedded || item.rate);
+  const firstMonth = activeMonths[0]?.month || 1;
+  const lastMonth = activeMonths.at(-1)?.month || 12;
+  const rangeStart = Math.max(1, Math.min(firstMonth - 1, lastMonth - 5));
+  const rangeEnd = Math.min(12, Math.max(lastMonth + 1, rangeStart + 5));
+  const chartMonths = allChartMonths.slice(rangeStart - 1, rangeEnd);
   const chartMax = Math.max(1, ...chartMonths.flatMap((item) => [item.chunked, item.embedded]));
+  const chartStep = Math.max(1, Math.ceil(chartMax / 4));
+  const chartCeiling = chartStep * 4;
+  const ratePoints = chartMonths.map((item, index) => item.rate ? { x: (index + .5) / chartMonths.length * 100, y: 100 - item.rate.rate, month: item.month } : null);
+  const ratePath = ratePoints.reduce<{ path: string; previous: boolean }>((result, point) => {
+    if (!point) return { ...result, previous: false };
+    return { path: `${result.path}${result.previous ? " L" : " M"}${point.x} ${point.y}`, previous: true };
+  }, { path: "", previous: false }).path;
+  const selectedRate = successRates.find((item) => item.year === chartYear && item.month === selectedRateMonth);
 
   const selected = documents.find((document) => document.id === selectedId) || null;
   const selectDocument = async (document: HealthDocument) => {
@@ -1709,24 +1730,48 @@ function AdminKnowledgeHealth() {
     </div>
     <section className="health-monthly" aria-labelledby="health-monthly-title">
       <div className="health-monthly-head">
-        <div><h3 id="health-monthly-title">Monthly processing</h3><p>Documents completing each stage by month</p></div>
+        <div><h3 id="health-monthly-title">Monthly processing</h3><p>{chartView === "volume" ? "Documents completing each stage by month" : "Successful processing runs by completion month"}</p></div>
         <div className="health-monthly-controls">
-          <div className="health-monthly-legend"><span><i className="chunked" />Chunked</span><span><i className="embedded" />Embedded &amp; indexed</span></div>
           <label>Year <select value={chartYear} onChange={(event) => setChartYear(Number(event.target.value))}>{years.map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
         </div>
       </div>
+      <div className="health-monthly-toolbar">
+        <div className="health-monthly-toggle" role="group" aria-label="Chart view">
+          <button type="button" aria-pressed={chartView === "volume"} onClick={() => setChartView("volume")}>Processing volume</button>
+          <button type="button" aria-pressed={chartView === "success"} onClick={() => setChartView("success")}>Success rate</button>
+        </div>
+        <div className="health-monthly-legend">{chartView === "volume" ? <><span><i className="chunked" />Chunked</span><span><i className="embedded" />Embedded &amp; indexed</span></> : <span><i className="success" />Success rate</span>}</div>
+      </div>
       {monthlyWarning && <p className="health-monthly-warning" role="status">{monthlyWarning}</p>}
       {monthlyLoading ? <p className="health-monthly-empty">Loading monthly processing…</p>
-        : !chartMonths.some((item) => item.chunked || item.embedded) ? <p className="health-monthly-empty">No verified processing stages recorded for {chartYear}.</p>
-          : <div className="health-monthly-scroll"><div className="health-monthly-chart" role="img" aria-label={`Monthly document processing for ${chartYear}. ${chartMonths.map((item) => `${item.name}: ${item.chunked} chunked, ${item.embedded} embedded and indexed`).join("; ")}`}>
-            {chartMonths.map((item) => <div className="health-monthly-group" key={item.name}>
-              <div className="health-monthly-bars">
-                <div className="health-monthly-bar-slot"><div className="health-monthly-bar chunked" style={{ height: `${item.chunked / chartMax * 100}%` }} title={`${item.name}: ${item.chunked} chunked documents`}>{item.chunked > 0 && <span>{item.chunked}</span>}</div></div>
-                <div className="health-monthly-bar-slot"><div className="health-monthly-bar embedded" style={{ height: `${item.embedded / chartMax * 100}%` }} title={`${item.name}: ${item.embedded} embedded and indexed documents`}>{item.embedded > 0 && <span>{item.embedded}</span>}</div></div>
-              </div><span className="health-monthly-month">{item.name}</span>
-            </div>)}
-          </div></div>}
-      <p className="health-monthly-note">Counts use verified stage completion dates. Documents with unavailable history remain separate in the summary above.</p>
+        : chartView === "volume" && !chartMonths.some((item) => item.chunked || item.embedded) ? <p className="health-monthly-empty">No verified processing stages recorded for {chartYear}.</p>
+          : chartView === "success" && !chartMonths.some((item) => item.rate) ? <p className="health-monthly-empty">No completed processing runs recorded for {chartYear}.</p>
+            : <div className="health-monthly-scroll"><div className="health-monthly-plot" style={{ minWidth: `${Math.max(420, chartMonths.length * 66)}px` }}>
+              <div className="health-monthly-axis">{[4, 3, 2, 1, 0].map((tick) => <span key={tick}>{chartView === "volume" ? tick * chartStep : `${tick * 25}%`}</span>)}</div>
+              <div className="health-monthly-data">
+                <div className="health-monthly-grid" aria-hidden="true">{[0, 1, 2, 3, 4].map((tick) => <span key={tick} />)}</div>
+                {chartView === "volume" ? <div className="health-monthly-bars-chart" role="img" aria-label={`Monthly document processing for ${chartYear}. ${chartMonths.map((item) => `${item.name}: ${item.chunked} chunked, ${item.embedded} embedded and indexed`).join("; ")}`}>
+                  {chartMonths.map((item) => <div className="health-monthly-group" key={item.name}>
+                    <div className="health-monthly-bars">
+                      <div className="health-monthly-bar-slot"><div className="health-monthly-bar chunked" style={{ height: `${item.chunked / chartCeiling * 100}%` }} title={`${item.name}: ${item.chunked} chunked documents`}>{item.chunked > 0 && <span>{item.chunked}</span>}</div></div>
+                      <div className="health-monthly-bar-slot"><div className="health-monthly-bar embedded" style={{ height: `${item.embedded / chartCeiling * 100}%` }} title={`${item.name}: ${item.embedded} embedded and indexed documents`}>{item.embedded > 0 && <span>{item.embedded}</span>}</div></div>
+                    </div>
+                  </div>)}
+                </div> : <div className="health-monthly-rate-chart">
+                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d={ratePath} /></svg>
+                  {ratePoints.map((point) => {
+                    if (!point) return null;
+                    const rate = chartMonths.find((item) => item.month === point.month)?.rate;
+                    if (!rate) return null;
+                    const detail = `${monthNames[point.month - 1]} ${chartYear}: ${rate.rate.toFixed(1)}% (${rate.successful} successful, ${rate.failed} failed)`;
+                    return <button type="button" key={point.month} className="health-monthly-point" style={{ left: `${point.x}%`, top: `${point.y}%` }} data-tooltip={detail} aria-label={detail} onClick={() => setSelectedRateMonth(point.month)} />;
+                  })}
+                </div>}
+                <div className="health-monthly-months">{chartMonths.map((item) => <span key={item.month}>{item.name}</span>)}</div>
+              </div>
+            </div></div>}
+      {chartView === "success" && selectedRate && <p className="health-monthly-detail" role="status">{monthNames[selectedRate.month - 1]} {selectedRate.year}: {selectedRate.rate.toFixed(1)}% successful ({selectedRate.successful} successful, {selectedRate.failed} failed)</p>}
+      <p className="health-monthly-note">{chartView === "volume" ? "Counts use verified stage completion dates. Documents with unavailable history remain separate in the summary above." : "Successful terminal runs / successful and failed terminal runs. Active, queued, canceled, and unknown-status runs are excluded."}</p>
     </section>
     <div className="health-layout">
       <div className="health-table-wrap"><div className="health-table-heading"><h3>Document processing</h3><small>{documents.length} document{documents.length === 1 ? "" : "s"}</small></div>

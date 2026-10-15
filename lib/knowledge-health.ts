@@ -22,11 +22,39 @@ export type WindmillFlowJob = {
   created_at?: string;
   completed_at?: string;
   success?: boolean;
+  canceled?: boolean;
   args?: { file_name?: string; dropbox_path?: string; dropbox_file_id?: string };
   flow_status?: { modules?: Array<{ id?: string; type?: string; job?: string; skipped?: boolean }> };
 };
 
 export type MonthlyProcessing = { year: number; month: number; chunked: number; embedded: number };
+export type MonthlySuccessRate = { year: number; month: number; successful: number; failed: number; rate: number };
+
+function completionMonth(value: string) {
+  if (!Number.isFinite(Date.parse(value))) return null;
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", year: "numeric", month: "numeric" })
+    .formatToParts(new Date(value));
+  return {
+    year: Number(parts.find((part) => part.type === "year")?.value),
+    month: Number(parts.find((part) => part.type === "month")?.value),
+  };
+}
+
+export function buildMonthlySuccessRates(runs: WindmillFlowJob[]): MonthlySuccessRate[] {
+  const monthly = new Map<string, MonthlySuccessRate>();
+  for (const run of runs) {
+    if (run.canceled !== false || typeof run.success !== "boolean" || !run.completed_at) continue;
+    const date = completionMonth(run.completed_at);
+    if (!date) continue;
+    const key = `${date.year}-${date.month}`;
+    const bucket = monthly.get(key) || { ...date, successful: 0, failed: 0, rate: 0 };
+    if (run.success) bucket.successful++;
+    else bucket.failed++;
+    bucket.rate = bucket.successful / (bucket.successful + bucket.failed) * 100;
+    monthly.set(key, bucket);
+  }
+  return [...monthly.values()].sort((left, right) => left.year - right.year || left.month - right.month);
+}
 
 export function buildMonthlyProcessing(
   runs: WindmillFlowJob[],
@@ -47,10 +75,7 @@ export function buildMonthlyProcessing(
   const monthly = new Map<string, MonthlyProcessing>();
   for (const [key, completedAt] of latest) {
     const metric = key.split("\0")[1] as "chunked" | "embedded";
-    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", year: "numeric", month: "numeric" })
-      .formatToParts(new Date(completedAt));
-    const year = Number(parts.find((part) => part.type === "year")?.value);
-    const month = Number(parts.find((part) => part.type === "month")?.value);
+    const { year, month } = completionMonth(completedAt)!;
     const bucketKey = `${year}-${month}`;
     const bucket = monthly.get(bucketKey) || { year, month, chunked: 0, embedded: 0 };
     bucket[metric]++;

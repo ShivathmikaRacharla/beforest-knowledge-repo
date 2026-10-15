@@ -1,5 +1,5 @@
 import { listKnowledgeDocuments } from "./kms";
-import { buildKnowledgeHealth, buildMonthlyProcessing, HEALTH_STAGES, type HealthDocument, type HealthStageId, type MonthlyProcessing, type WindmillFlowJob } from "./knowledge-health";
+import { buildKnowledgeHealth, buildMonthlyProcessing, buildMonthlySuccessRates, HEALTH_STAGES, type HealthDocument, type HealthStageId, type MonthlyProcessing, type MonthlySuccessRate, type WindmillFlowJob } from "./knowledge-health";
 
 const FLOW_PATH = "f/kms/process_approved_document_pipeline";
 const CACHE_MS = 20_000;
@@ -7,7 +7,7 @@ const HISTORY_PAGE_SIZE = 100;
 let cached: { expiresAt: number; value: { documents: HealthDocument[]; warning?: string } } | null = null;
 const completedFlowJobs = new Map<string, WindmillFlowJob>();
 const completedStageJobs = new Map<string, string>();
-let monthlyCache: { expiresAt: number; value: { monthly: MonthlyProcessing[]; warning?: string } } | null = null;
+let monthlyCache: { expiresAt: number; value: { monthly: MonthlyProcessing[]; successRates: MonthlySuccessRate[]; warning?: string } } | null = null;
 
 type WindmillStepJob = {
   id?: string;
@@ -147,6 +147,7 @@ export async function getKnowledgeHealthMonthly(forceRefresh = false) {
   }
   const value = {
     monthly: buildMonthlyProcessing(runs, completedAtByJob),
+    successRates: buildMonthlySuccessRates(runs),
     ...(!historyComplete || !stagesComplete ? { warning: "Some processing history could not be verified; monthly counts may be incomplete." } : {}),
   };
   monthlyCache = { expiresAt: Date.now() + 60_000, value };
