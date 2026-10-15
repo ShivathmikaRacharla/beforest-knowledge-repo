@@ -35,7 +35,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useAuth, type AuthUser, type Role } from "./auth-provider";
 import { DEFAULT_KNOWLEDGE_SYSTEM_PROMPT } from "@/lib/prompts";
-import type { HealthDocument, HealthStageState } from "@/lib/knowledge-health";
+import type { HealthDocument, HealthStageState, MonthlyProcessing } from "@/lib/knowledge-health";
 
 type View = "knowledge" | "ask" | "web" | "admin";
 type ConversationSummary = {
@@ -1585,6 +1585,10 @@ function healthStateIcon(state: HealthStageState) {
 
 function AdminKnowledgeHealth() {
   const [documents, setDocuments] = useState<HealthDocument[]>([]);
+  const [monthly, setMonthly] = useState<MonthlyProcessing[]>([]);
+  const [monthlyWarning, setMonthlyWarning] = useState("");
+  const [monthlyLoading, setMonthlyLoading] = useState(true);
+  const [chartYear, setChartYear] = useState(() => new Date().getFullYear());
   const [warning, setWarning] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1613,14 +1617,44 @@ function AdminKnowledgeHealth() {
     }
   }, []);
 
+  const loadMonthly = useCallback(async (force = false) => {
+    try {
+      const response = await fetch(`/api/admin/knowledge-health?monthly=1${force ? "&refresh=1" : ""}`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Monthly processing history is unavailable.");
+      setMonthly(data.monthly || []);
+      setMonthlyWarning(data.warning || "");
+    } catch (caught) {
+      setMonthlyWarning(caught instanceof Error ? caught.message : "Monthly processing history is unavailable.");
+    } finally {
+      setMonthlyLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
   }, [load]);
   useEffect(() => {
+    const timer = window.setTimeout(() => { void loadMonthly(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadMonthly]);
+  useEffect(() => {
     const timer = window.setInterval(() => { void load(true, true); }, 60_000);
     return () => window.clearInterval(timer);
   }, [load]);
+  useEffect(() => {
+    const timer = window.setInterval(() => { void loadMonthly(true); }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [loadMonthly]);
+
+  const years = [...new Set([new Date().getFullYear(), ...monthly.map((item) => item.year)])].sort((a, b) => b - a);
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const chartMonths = monthNames.map((name, index) => {
+    const item = monthly.find((entry) => entry.year === chartYear && entry.month === index + 1);
+    return { name, chunked: item?.chunked || 0, embedded: item?.embedded || 0 };
+  });
+  const chartMax = Math.max(1, ...chartMonths.flatMap((item) => [item.chunked, item.embedded]));
 
   const selected = documents.find((document) => document.id === selectedId) || null;
   const selectDocument = async (document: HealthDocument) => {
@@ -1664,7 +1698,7 @@ function AdminKnowledgeHealth() {
     indexed: documents.filter((document) => document.status === "indexed").length,
   };
   return <div className="knowledge-health">
-    <div className="knowledge-health-toolbar"><p>Stages come from Windmill processing runs. Refreshes every minute while this tab is open; retrieval checks run only when requested.</p><button className="secondary" onClick={() => void load(true)} disabled={refreshing}><RefreshCw size={15} />{refreshing ? "Refreshing…" : "Refresh"}</button></div>
+    <div className="knowledge-health-toolbar"><p>Stages come from Windmill processing runs. Refreshes every minute while this tab is open; retrieval checks run only when requested.</p><button className="secondary" onClick={() => { void load(true); void loadMonthly(true); }} disabled={refreshing}><RefreshCw size={15} />{refreshing ? "Refreshing…" : "Refresh"}</button></div>
     {warning && <div className="knowledge-notice" role="status">{warning}</div>}
     {error && <div className="knowledge-notice" role="alert">{error}</div>}
     <div className="health-summary">
@@ -1673,6 +1707,27 @@ function AdminKnowledgeHealth() {
       <div><span>Needs attention</span><strong>{counts.failed}</strong><small>Latest run failed</small></div>
       <div><span>History unavailable</span><strong>{counts.indexed}</strong><small>Indexed legacy documents</small></div>
     </div>
+    <section className="health-monthly" aria-labelledby="health-monthly-title">
+      <div className="health-monthly-head">
+        <div><h3 id="health-monthly-title">Monthly processing</h3><p>Documents completing each stage by month</p></div>
+        <div className="health-monthly-controls">
+          <div className="health-monthly-legend"><span><i className="chunked" />Chunked</span><span><i className="embedded" />Embedded &amp; indexed</span></div>
+          <label>Year <select value={chartYear} onChange={(event) => setChartYear(Number(event.target.value))}>{years.map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
+        </div>
+      </div>
+      {monthlyWarning && <p className="health-monthly-warning" role="status">{monthlyWarning}</p>}
+      {monthlyLoading ? <p className="health-monthly-empty">Loading monthly processing…</p>
+        : !chartMonths.some((item) => item.chunked || item.embedded) ? <p className="health-monthly-empty">No verified processing stages recorded for {chartYear}.</p>
+          : <div className="health-monthly-scroll"><div className="health-monthly-chart" role="img" aria-label={`Monthly document processing for ${chartYear}. ${chartMonths.map((item) => `${item.name}: ${item.chunked} chunked, ${item.embedded} embedded and indexed`).join("; ")}`}>
+            {chartMonths.map((item) => <div className="health-monthly-group" key={item.name}>
+              <div className="health-monthly-bars">
+                <div className="health-monthly-bar-slot"><div className="health-monthly-bar chunked" style={{ height: `${item.chunked / chartMax * 100}%` }} title={`${item.name}: ${item.chunked} chunked documents`}>{item.chunked > 0 && <span>{item.chunked}</span>}</div></div>
+                <div className="health-monthly-bar-slot"><div className="health-monthly-bar embedded" style={{ height: `${item.embedded / chartMax * 100}%` }} title={`${item.name}: ${item.embedded} embedded and indexed documents`}>{item.embedded > 0 && <span>{item.embedded}</span>}</div></div>
+              </div><span className="health-monthly-month">{item.name}</span>
+            </div>)}
+          </div></div>}
+      <p className="health-monthly-note">Counts use verified stage completion dates. Documents with unavailable history remain separate in the summary above.</p>
+    </section>
     <div className="health-layout">
       <div className="health-table-wrap"><div className="health-table-heading"><h3>Document processing</h3><small>{documents.length} document{documents.length === 1 ? "" : "s"}</small></div>
         {loading ? <div className="empty-admin-panel">Loading document processing…</div> : !documents.length ? <div className="empty-admin-panel">No document processing records are available.</div> : <div className="health-table-scroll"><div className="health-table">

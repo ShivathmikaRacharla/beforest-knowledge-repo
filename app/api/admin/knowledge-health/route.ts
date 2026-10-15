@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth";
 import { listKnowledgeDocuments, retrieveKnowledge } from "@/lib/kms";
 import { matchesApprovedDocument } from "@/lib/knowledge-health";
-import { getKnowledgeHealth, getKnowledgeHealthTrace } from "@/lib/knowledge-health-service";
+import { getKnowledgeHealth, getKnowledgeHealthMonthly, getKnowledgeHealthTrace } from "@/lib/knowledge-health-service";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -13,9 +13,12 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const runId = url.searchParams.get("runId");
+    const refresh = url.searchParams.get("refresh") === "1";
     const result = runId
       ? await getKnowledgeHealthTrace(runId)
-      : await getKnowledgeHealth(url.searchParams.get("refresh") === "1");
+      : url.searchParams.get("monthly") === "1"
+        ? await getKnowledgeHealthMonthly(refresh)
+        : await getKnowledgeHealth(refresh);
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Knowledge health read failed", error);

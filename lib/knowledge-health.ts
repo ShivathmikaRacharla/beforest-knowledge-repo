@@ -26,6 +26,39 @@ export type WindmillFlowJob = {
   flow_status?: { modules?: Array<{ id?: string; type?: string; job?: string; skipped?: boolean }> };
 };
 
+export type MonthlyProcessing = { year: number; month: number; chunked: number; embedded: number };
+
+export function buildMonthlyProcessing(
+  runs: WindmillFlowJob[],
+  completedAtByJob: Map<string, string>,
+): MonthlyProcessing[] {
+  const latest = new Map<string, string>();
+  for (const run of runs) {
+    const source = documentKey(run.args || {});
+    if (!source) continue;
+    for (const [stage, metric] of [["chunk", "chunked"], ["index", "embedded"]] as const) {
+      const stageModule = run.flow_status?.modules?.find((item) => item.id === stage);
+      const completedAt = stageModule?.type === "Success" && stageModule.job ? completedAtByJob.get(stageModule.job) : undefined;
+      if (!completedAt || !Number.isFinite(Date.parse(completedAt))) continue;
+      const key = `${source}\0${metric}`;
+      if (!latest.has(key) || Date.parse(completedAt) > Date.parse(latest.get(key)!)) latest.set(key, completedAt);
+    }
+  }
+  const monthly = new Map<string, MonthlyProcessing>();
+  for (const [key, completedAt] of latest) {
+    const metric = key.split("\0")[1] as "chunked" | "embedded";
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", year: "numeric", month: "numeric" })
+      .formatToParts(new Date(completedAt));
+    const year = Number(parts.find((part) => part.type === "year")?.value);
+    const month = Number(parts.find((part) => part.type === "month")?.value);
+    const bucketKey = `${year}-${month}`;
+    const bucket = monthly.get(bucketKey) || { year, month, chunked: 0, embedded: 0 };
+    bucket[metric]++;
+    monthly.set(bucketKey, bucket);
+  }
+  return [...monthly.values()].sort((left, right) => left.year - right.year || left.month - right.month);
+}
+
 const STAGE_LABELS: Record<HealthStageId, string> = {
   extract: "Extracted",
   chunk: "Chunked",

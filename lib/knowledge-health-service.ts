@@ -1,11 +1,13 @@
 import { listKnowledgeDocuments } from "./kms";
-import { buildKnowledgeHealth, HEALTH_STAGES, type HealthDocument, type HealthStageId, type WindmillFlowJob } from "./knowledge-health";
+import { buildKnowledgeHealth, buildMonthlyProcessing, HEALTH_STAGES, type HealthDocument, type HealthStageId, type MonthlyProcessing, type WindmillFlowJob } from "./knowledge-health";
 
 const FLOW_PATH = "f/kms/process_approved_document_pipeline";
 const CACHE_MS = 20_000;
 const HISTORY_PAGE_SIZE = 100;
 let cached: { expiresAt: number; value: { documents: HealthDocument[]; warning?: string } } | null = null;
 const completedFlowJobs = new Map<string, WindmillFlowJob>();
+const completedStageJobs = new Map<string, string>();
+let monthlyCache: { expiresAt: number; value: { monthly: MonthlyProcessing[]; warning?: string } } | null = null;
 
 type WindmillStepJob = {
   id?: string;
@@ -113,6 +115,41 @@ export async function getKnowledgeHealth(forceRefresh = false) {
         : undefined;
   const value = { documents: buildKnowledgeHealth(catalog, runs), ...(warning ? { warning } : {}) };
   cached = { expiresAt: Date.now() + CACHE_MS, value };
+  return value;
+}
+
+export async function getKnowledgeHealthMonthly(forceRefresh = false) {
+  if (!forceRefresh && monthlyCache && monthlyCache.expiresAt > Date.now()) return monthlyCache.value;
+  const { runs, historyComplete } = await allFlowJobs();
+  const stageIds = [...new Set(runs.flatMap((run) => (run.flow_status?.modules || [])
+    .filter((stage) => (stage.id === "chunk" || stage.id === "index") && stage.type === "Success" && stage.job)
+    .map((stage) => stage.job!)))];
+  const completedAtByJob = new Map<string, string>();
+  let stagesComplete = !runs.some((run) => (run.flow_status?.modules || [])
+    .some((stage) => (stage.id === "chunk" || stage.id === "index") && stage.type === "Success" && !stage.job));
+  for (let offset = 0; offset < stageIds.length; offset += 8) {
+    const batch = await Promise.allSettled(stageIds.slice(offset, offset + 8).map(async (id) => {
+      const cachedDate = completedStageJobs.get(id);
+      if (cachedDate) return { id, completedAt: cachedDate };
+      const job = await windmillGet<WindmillStepJob>(`jobs_u/get/${encodeURIComponent(id)}`);
+      const completedAt = job.success !== false && job.completed_at && Number.isFinite(Date.parse(job.completed_at))
+        ? job.completed_at : null;
+      if (completedAt) completedStageJobs.set(id, completedAt);
+      return { id, completedAt };
+    }));
+    for (const result of batch) {
+      if (result.status === "fulfilled" && result.value.completedAt) {
+        completedAtByJob.set(result.value.id, result.value.completedAt);
+      } else {
+        stagesComplete = false;
+      }
+    }
+  }
+  const value = {
+    monthly: buildMonthlyProcessing(runs, completedAtByJob),
+    ...(!historyComplete || !stagesComplete ? { warning: "Some processing history could not be verified; monthly counts may be incomplete." } : {}),
+  };
+  monthlyCache = { expiresAt: Date.now() + 60_000, value };
   return value;
 }
 
