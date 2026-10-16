@@ -213,7 +213,65 @@ button {
 }
 .notification-list {
   display: grid;
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
 }
+.document-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(4, 29, 21, 0.48);
+}
+.document-popup {
+  position: relative;
+  width: min(520px, 100%);
+  padding: 28px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(4, 29, 21, 0.25);
+}
+.document-popup-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+.document-popup-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  color: var(--forest);
+  background: var(--soft);
+}
+.document-popup h2 {
+  margin: 18px 0 8px;
+  font-size: 22px;
+}
+.document-popup p {
+  margin: 0 0 18px;
+  color: var(--muted);
+}
+.document-popup-list {
+  display: grid;
+  gap: 10px;
+  max-height: min(40vh, 300px);
+  overflow-y: auto;
+}
+.document-popup-list > div {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  line-height: 1.4;
+}
+.document-popup-list svg { flex: none; margin-top: 2px; color: var(--forest); }
+.document-popup-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
 .notification-item {
   display: grid;
   grid-template-columns: 10px 1fr;

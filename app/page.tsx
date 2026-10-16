@@ -38,6 +38,7 @@ import { DEFAULT_KNOWLEDGE_SYSTEM_PROMPT } from "@/lib/prompts";
 import type { HealthDocument, HealthStageState, MonthlyProcessing } from "@/lib/knowledge-health";
 
 type View = "knowledge" | "ask" | "web" | "admin";
+type PortalNotification = { id: number; title: string; detail: string; createdAt: string; readAt?: string | null };
 type ConversationSummary = {
   id: string;
   title: string;
@@ -233,13 +234,29 @@ function Header({
   onLogout: () => void;
   openMobile: () => void;
 }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [stats, setStats] = useState<{ queries?: number; positive?: number; negative?: number } | null>(null);
   const [vectorStatus, setVectorStatus] = useState<{ fileCounts?: { completed?: number; in_progress?: number; failed?: number; cancelled?: number } } | null>(null);
-  const [personalNotifications, setPersonalNotifications] = useState<Array<{ id: number; title: string; detail: string; createdAt: string }>>([]);
+  const [personalNotifications, setPersonalNotifications] = useState<PortalNotification[]>([]);
+  const [dismissedDocumentIds, setDismissedDocumentIds] = useState<number[]>([]);
   const notificationRef = useRef<HTMLDivElement | null>(null);
   const profileRef = useRef<HTMLDivElement | null>(null);
+  const newDocumentNotifications = personalNotifications.filter((item) => item.title === "Document ready" && !item.readAt && !dismissedDocumentIds.includes(item.id));
+  const dismissDocumentPopup = useCallback(() => {
+    const ids = newDocumentNotifications.map((item) => item.id);
+    if (!ids.length) return;
+    setDismissedDocumentIds((current) => [...current, ...ids]);
+    void fetch("/api/notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }).then((response) => {
+      if (!response.ok) throw new Error("Could not mark document notifications as read");
+      setPersonalNotifications((current) => current.map((item) => ids.includes(item.id) ? { ...item, readAt: new Date().toISOString() } : item));
+    }).catch(() => undefined);
+  }, [newDocumentNotifications]);
   const notifications = useMemo(() => {
     const completed = vectorStatus?.fileCounts?.completed ?? 0;
     const processing = vectorStatus?.fileCounts?.in_progress ?? 0;
@@ -282,7 +299,7 @@ function Header({
       .then((response) => response.json())
       .then((data) => setPersonalNotifications(data.notifications || []))
       .catch(() => undefined);
-  }, [user.id]);
+  }, []);
 
   useEffect(() => {
     loadPersonalNotifications();
@@ -327,7 +344,7 @@ function Header({
             onClick={() => setNotificationsOpen((current) => !current)}
           >
             <Bell size={19} />
-            <i />
+            {newDocumentNotifications.length > 0 && <i />}
           </button>
           {notificationsOpen && (
             <div className="notification-panel" role="dialog" aria-label="Notifications">
@@ -336,8 +353,8 @@ function Header({
                 <span>{notifications.length + personalNotifications.length} updates</span>
               </div>
               <div className="notification-list">
-                {[...personalNotifications.map((item) => ({ ...item, tone: "success" })), ...notifications].map((item) => (
-                  <div className="notification-item" key={item.title}>
+                {[...personalNotifications.map((item) => ({ ...item, tone: "success", key: `personal-${item.id}` })), ...notifications.map((item) => ({ ...item, key: `summary-${item.title}` }))].map((item) => (
+                  <div className="notification-item" key={item.key}>
                     <span className={`notification-status ${item.tone}`} />
                     <span>
                       <strong>{item.title}</strong>
@@ -349,6 +366,23 @@ function Header({
             </div>
           )}
         </div>
+        {newDocumentNotifications.length > 0 && (
+          <div className="document-popup-backdrop">
+            <div className="document-popup" role="dialog" aria-modal="true" aria-labelledby="document-popup-title">
+              <button className="document-popup-close icon-btn" aria-label="Dismiss document notifications" onClick={dismissDocumentPopup}><X size={19} /></button>
+              <span className="document-popup-icon"><Bell size={22} /></span>
+              <h2 id="document-popup-title">{newDocumentNotifications.length === 1 ? "A new document is ready" : `${newDocumentNotifications.length} new documents are ready`}</h2>
+              <p>These documents are available in your team’s knowledge base.</p>
+              <div className="document-popup-list">
+                {newDocumentNotifications.map((item) => <div key={item.id}><FileText size={17} /><span>{item.detail}</span></div>)}
+              </div>
+              <div className="document-popup-actions">
+                <button className="secondary" onClick={dismissDocumentPopup}>Dismiss</button>
+                <button className="primary" onClick={() => { dismissDocumentPopup(); router.push("/documents"); }}>View documents</button>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="profile-wrap" ref={profileRef}>
           <button className="profile" onClick={() => setOpen(!open)}>
             <span className="avatar">S</span>
@@ -2037,7 +2071,7 @@ function AppearanceSettings() {
 }
 
 function SystemSettings() {
-  const defaults = useMemo(() => ({ conversationHistory: true, emailNotifications: false }), []);
+  const defaults = useMemo(() => ({ conversationHistory: true }), []);
   const [settings, setSettings] = useState(defaults);
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_KNOWLEDGE_SYSTEM_PROMPT);
   const [promptStatus, setPromptStatus] = useState("");
@@ -2057,7 +2091,7 @@ function SystemSettings() {
     setPromptStatus("Default prompt restored locally. Save to apply it.");
   };
   const promptStatusTone = promptStatus.startsWith("Unable") || promptStatus.startsWith("Prompt is too short") ? "error" : "success";
-  const rows: Array<[keyof typeof settings, string, string]> = [["conversationHistory", "Conversation history", "Retain query and answer history for 90 days"], ["emailNotifications", "Email notifications", "Notify teams about newly published documents"]];
+  const rows: Array<[keyof typeof settings, string, string]> = [["conversationHistory", "Conversation history", "Retain query and answer history for 90 days"]];
   return <><div className="setting-list">{rows.map(([key, title, description]) => <div key={key}><span><strong>{title}</strong><small>{description}</small></span><button className={`toggle ${settings[key] ? "on" : ""}`} onClick={() => toggle(key)}><i /></button></div>)}</div><div className="settings-form prompt-settings-form"><label className="span-2">System prompt<textarea value={systemPrompt} onChange={(event) => { setSystemPrompt(event.target.value); setPromptStatus(""); }} /></label><div className="span-2 form-actions"><button className="secondary" onClick={resetPrompt}>Reset default</button><button className="primary" onClick={() => void savePrompt()}>Save prompt</button></div>{promptStatus && <div className={`admin-action-message prompt-save-message span-2 ${promptStatusTone}`} role="status" aria-live="polite">{promptStatusTone === "success" ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}<span>{promptStatus}</span></div>}</div></>;
 }
 
