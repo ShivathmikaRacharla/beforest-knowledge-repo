@@ -1,20 +1,20 @@
 @font-face {
   font-family: "ABC Arizona Flare";
-  src: url("https://isdbyvwocudnlwzghphw.supabase.co/storage/v1/object/public/fonts_beforest_arizona/ABCArizonaFlare-Light.e9c1597c.woff2") format("woff2");
+  src: url("https://files.ops.beforest.co/fonts_beforest_arizona/ABCArizonaFlare-Light.e9c1597c.woff2") format("woff2");
   font-style: normal;
   font-weight: 300;
   font-display: swap;
 }
 @font-face {
   font-family: "ABC Arizona Flare";
-  src: url("https://isdbyvwocudnlwzghphw.supabase.co/storage/v1/object/public/fonts_beforest_arizona/ABCArizonaFlare-Regular.cbcc518c.woff2") format("woff2");
+  src: url("https://files.ops.beforest.co/fonts_beforest_arizona/ABCArizonaFlare-Regular.cbcc518c.woff2") format("woff2");
   font-style: normal;
   font-weight: 400;
   font-display: swap;
 }
 @font-face {
   font-family: "ABC Arizona Flare";
-  src: url("https://isdbyvwocudnlwzghphw.supabase.co/storage/v1/object/public/fonts_beforest_arizona/ABCArizonaFlare-Medium.7ce0f1db.woff2") format("woff2");
+  src: url("https://files.ops.beforest.co/fonts_beforest_arizona/ABCArizonaFlare-Medium.7ce0f1db.woff2") format("woff2");
   font-style: normal;
   font-weight: 600;
   font-display: swap;
@@ -97,7 +97,7 @@ button {
   display: block;
   width: 174px;
   height: 60px;
-  background-image: url("https://isdbyvwocudnlwzghphw.supabase.co/storage/v1/object/public/hr_material/induction_ppt_images/beforest-logo-white.png");
+  background-image: url("https://files.ops.beforest.co/hr_material/induction_ppt_images/beforest-logo-white.png");
   background-repeat: no-repeat;
   background-position: center;
   background-size: contain;
