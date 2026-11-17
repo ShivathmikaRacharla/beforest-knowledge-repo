@@ -825,6 +825,7 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
   );
   const [liveSources, setLiveSources] = useState<ChatCitation[]>([]);
   const [loading, setLoading] = useState(false);
+  const [restoring, setRestoring] = useState(!fresh);
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
@@ -865,7 +866,8 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
         if (lastUser) setAskedQuestion(lastUser.content);
         if (lastAssistant) setAnswer(lastAssistant.content);
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => setRestoring(false));
   }, [sessionId, initialQuestion, fresh]);
 
   const submit = async (question = query) => {
@@ -1049,6 +1051,19 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
               ))}
             </div>
           )}
+          {restoring ? (
+          <article className="answer">
+            <div className="question-row">
+              <h2>{askedQuestion}</h2>
+            </div>
+            <div className="answer-body">
+              <div className="answer-loading">
+                <i />
+                <span>Loading conversation…</span>
+              </div>
+            </div>
+          </article>
+          ) : (
           <article className="answer">
             <div className="question-row">
               <h2>{askedQuestion}</h2>
@@ -1150,6 +1165,7 @@ function AskView({ initialQuestion = "What is our approach to regenerative fores
               </div>
             </div>
           </article>
+          )}
         </div>
       </main>
       {sourcesOpen && (

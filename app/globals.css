@@ -2029,7 +2029,8 @@ button {
 .empty-knowledge{padding:42px 18px;color:var(--muted);text-align:center}.empty-knowledge.error-state{color:var(--danger)}
 .chat-sidebar-row.selected{background:rgba(255,255,255,.14);color:#fff;font-weight:600}.chat-sidebar-row.selected svg{color:#d9eee1}
 .empty-admin-row,.empty-admin-panel{padding:28px 18px;color:var(--muted);text-align:center}.empty-admin-panel{min-height:180px;display:grid;place-items:center}
-.ask-layout.with-sources{grid-template-columns:1fr}.ask-layout.with-sources .sources{position:fixed;right:0;top:72px;width:330px;height:calc(100vh - 72px);z-index:25;box-shadow:-14px 0 36px rgba(13,35,27,.12);background:#fff}
+/* Sources slides over the chat only on small screens; on wide screens it sits beside the chat (see .ask-layout.with-sources grid) */
+@media(max-width:1100px){.ask-layout.with-sources{grid-template-columns:1fr}.ask-layout.with-sources .sources{position:fixed;right:0;top:72px;width:330px;height:calc(100vh - 72px);z-index:25;box-shadow:-14px 0 36px rgba(13,35,27,.12);background:#fff}}
 .ask-main{min-width:0}
 .ask-inner{width:100%;min-width:0;box-sizing:border-box}
 .appearance-preview{width:56px;height:56px;object-fit:contain;border:1px solid var(--line);border-radius:8px;padding:6px}
@@ -2213,3 +2214,7 @@ button {
 .health-run-id{display:block;margin:14px 18px 0}
 @media(max-width:1100px){.health-layout{grid-template-columns:1fr}.health-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:600px){.health-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.knowledge-health-toolbar,.health-monthly-head{align-items:flex-start;flex-direction:column}.health-monthly-controls{width:100%;justify-content:space-between;flex-wrap:wrap}}
+
+/* Keep the chat typing box visible on long/restored conversations */
+.ask-inner .ask-box{position:sticky;bottom:0;z-index:5;padding-bottom:12px;box-shadow:0 -12px 18px -12px rgba(13,35,27,.12)}
+@media(max-width:760px){.ask-inner .ask-box{padding-bottom:8px}}
